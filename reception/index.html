@@ -126,6 +126,8 @@ body.dark .p-new{color:#a5b4fc}body.dark .p-run{color:#93c5fd}body.dark .p-ok{co
 .sheet .cam{margin-bottom:10px}
 body.embed header.top{padding-top:10px}
 .hbtn{text-decoration:none;display:inline-block;margin-left:6px}
+.banner.ok{background:rgba(22,163,74,.1);border:1px solid rgba(22,163,74,.35)}
+#qrcar-n{margin-top:6px;font-size:.95rem}
 </style>
 </head>
 <body>
@@ -149,6 +151,10 @@ var qrcode=function(){function i(t,r){function a(t,r){g=function(t){for(var r=ne
                       = anomalie (excédent / fuite). Toute anomalie doit être JUSTIFIÉE puis validée (ou
                       corrigée) avant l'intégration.
      3. ✅ INTÉGRÉ   — stock augmenté, prix de vente mis à jour, achat enregistré dans Approvisionnement Pro.
+   MODE AUTONOME (v3) : le téléphone n'a pas besoin d'être connecté à COVO Pro. Le bon arrive par son QR code ;
+   une fois la vérification terminée, l'appli affiche le QR « réception » qu'on présente à COVO Pro
+   (Prévisions → 📥 Intégrer) : COVO Pro injecte stock, prix de vente et achat en un scan.
+   Les longs bons sont découpés en plusieurs QR (COVOQ:clé:k:n:…) recomposés automatiquement à la lecture.
    Les bons voyagent entre appareils par Google Drive (via COVO Pro) ou directement par le QR code du bon. */
 (function () {
     'use strict';
@@ -163,8 +169,10 @@ var qrcode=function(){function i(t,r){function a(t,r){g=function(t){for(var r=ne
     function fq(v, kg) { return (Math.round(num(v) * 1000) / 1000).toLocaleString('fr-FR') + (kg ? ' kg' : ''); }
     function J(k, d) { try { var v = JSON.parse(localStorage.getItem(k) || 'null'); return v == null ? d : v; } catch (e) { return d; } }
     function user() { return J('covo_current_user', null); }
-    function uname() { var u = user(); return u ? (u.username || u.name || '') : ''; }
-    function markPending() { var now = new Date().toISOString(); try { localStorage.setItem('covo_drive_pending', now); localStorage.setItem('covo_last_local_change', now); localStorage.setItem('covo_recep_dirty', now); } catch (e) {} }
+    function uname() { var u = user(); return u ? (u.username || u.name || '') : (localStorage.getItem('covo_recep_name') || ''); }
+    function standalone() { return !user(); }
+    function hasCatalog() { return !!user() && products().length > 0; }
+    function markPending() { if (standalone()) return; var now = new Date().toISOString(); try { localStorage.setItem('covo_drive_pending', now); localStorage.setItem('covo_last_local_change', now); localStorage.setItem('covo_recep_dirty', now); } catch (e) {} }
     function bons() { var b = J(KB, []); return Array.isArray(b) ? b : []; }
     function saveBons(list) { localStorage.setItem(KB, JSON.stringify(list)); markPending(); }
     function getBon(id) { return bons().find(function (b) { return b.id === id; }) || null; }
@@ -196,7 +204,7 @@ var qrcode=function(){function i(t,r){function a(t,r){g=function(t){for(var r=ne
     function packBon(b) {
         var P = b.purchase || null;
         var o = { v: 1, id: b.id, n: b.numero, d: Date.parse(b.date) || 0, t: r2(b.total), s: b.status, c: b.createdBy || '', u: b.updatedAt || Date.now(),
-            L: b.lines.map(function (l) { return [l.pid, String(l.name || '').slice(0, 40), l.bc || '', num(l.qty), l.kg ? 1 : 0, l.cost == null ? null : r2(l.cost)]; }) };
+            L: b.lines.map(function (l) { var p = prodOf(l.pid), pr = p ? shopPrice(p) : (l.pr == null ? null : num(l.pr)); return [l.pid, String(l.name || '').slice(0, 32), l.bc || '', num(l.qty), l.kg ? 1 : 0, l.cost == null ? null : r2(l.cost), pr == null ? null : r2(pr)]; }) };
         if (P) o.P = { a: P.amountPaid == null ? null : r2(P.amountPaid), m: P.payMode || '', f: P.fournisseur || '', at: P.validatedAt ? Date.parse(P.validatedAt) : 0, by: P.by || '',
             l: b.lines.map(function (l, i) { var x = (P.lines || {})[i] || {}; return [x.got == null ? null : num(x.got), x.price == null ? null : r2(x.price), x.done ? 1 : 0]; }) };
         return QRP + JSON.stringify(o);
@@ -204,21 +212,86 @@ var qrcode=function(){function i(t,r){function a(t,r){g=function(t){for(var r=ne
     function unpackBon(txt) {
         var o = JSON.parse(String(txt).slice(QRP.length)); if (!o || !o.id || !Array.isArray(o.L)) throw new Error('QR invalide');
         var b = { id: o.id, numero: o.n, date: new Date(o.d || Date.now()).toISOString(), status: o.s || 'a_recevoir', total: num(o.t), createdBy: o.c || '', updatedAt: o.u || 0,
-            lines: o.L.map(function (a) { return { pid: a[0], name: a[1], bc: a[2], qty: num(a[3]), kg: !!a[4], cost: a[5] }; }) };
+            lines: o.L.map(function (a) { return { pid: a[0], name: a[1], bc: a[2], qty: num(a[3]), kg: !!a[4], cost: a[5], pr: a[6] == null ? null : a[6] }; }) };
         if (o.P) { b.purchase = { amountPaid: o.P.a, payMode: o.P.m, fournisseur: o.P.f, validatedAt: o.P.at ? new Date(o.P.at).toISOString() : null, by: o.P.by, lines: {} }; (o.P.l || []).forEach(function (x, i) { b.purchase.lines[i] = { got: x[0], price: x[1], done: !!x[2] }; }); }
         return b;
     }
-    var RANK = { a_recevoir: 0, en_achat: 1, achete: 2, en_cours: 3, recu: 4 };
+    var RANK = { a_recevoir: 0, en_achat: 1, achete: 2, en_cours: 3, verifie: 4, recu: 5 };
     function importBon(txt) {
         var inc; try { inc = unpackBon(txt); } catch (e) { toast('QR de bon illisible'); beep('bad'); return null; }
         var L = bons(), i = L.findIndex(function (x) { return x.id === inc.id; });
         if (i < 0) { L.unshift(inc); saveBons(L); toast('📥 Bon ' + inc.numero + ' récupéré'); return inc; }
         var loc = L[i];
         if ((RANK[inc.status] || 0) > (RANK[loc.status] || 0) && loc.status !== 'recu') {
-            loc.status = inc.status === 'en_cours' ? 'achete' : inc.status; if (inc.purchase) loc.purchase = inc.purchase; loc.updatedAt = Date.now(); L[i] = loc; saveBons(L);
+            loc.status = (inc.status === 'en_cours' || inc.status === 'verifie') ? 'achete' : inc.status; if (inc.purchase) loc.purchase = inc.purchase;
+            loc.lines.forEach(function (l, k) { if (inc.lines[k] && inc.lines[k].pr != null && l.pr == null) l.pr = inc.lines[k].pr; }); loc.updatedAt = Date.now(); L[i] = loc; saveBons(L);
             toast('🔄 Bon ' + loc.numero + ' mis à jour (achats)');
         }
         return L[i];
+    }
+    /* QR « réception » : achats + comptage + justifications, à présenter à COVO Pro → 📥 Intégrer */
+    var QRC = 'COVORC1:', QCH = 'COVOQ:', MAXQ = 620;
+    function rIdx(r) { var k = REASONS.indexOf(r); return k >= 0 ? k : String(r || ''); }
+    function rTxt(v) { return typeof v === 'number' ? (REASONS[v] || 'Autre') : String(v || 'Autre'); }
+    function packRC(b) {
+        var P = b.purchase || {}, r = rec(b), o = { v: 1, id: b.id, n: b.numero,
+            P: { a: P.amountPaid == null ? null : r2(P.amountPaid), m: P.payMode || '', f: P.fournisseur || '', at: P.validatedAt ? Date.parse(P.validatedAt) : Date.now(), by: P.by || '',
+                l: b.lines.map(function (l, i) { var x = (P.lines || {})[i] || {}; return [x.got == null ? null : num(x.got), x.price == null ? null : r2(x.price), x.done ? 1 : 0]; }) },
+            R: { by: r.doneBy || uname(), at: r.doneAt ? Date.parse(r.doneAt) : Date.now(), c: b.lines.map(function (l, i) { return Math.round(got(b, i) * 1000) / 1000; }),
+                j: Object.keys(r.justif).filter(function (k) { return r.justif[k].decision === 'valide'; }).map(function (k) { var J1 = r.justif[k]; return [+k, rIdx(J1.reason), String(J1.text || '').slice(0, 60), num(J1.qty)]; }),
+                x: r.extras.filter(function (e) { return e.justif && e.justif.decision === 'valide'; }).map(function (e) { return [e.bc, e.pid == null ? null : e.pid, e.n, rIdx(e.justif.reason), String(e.justif.text || '').slice(0, 60)]; }) } };
+        return QRC + JSON.stringify(o);
+    }
+    function importRC(txt) {
+        var o; try { o = JSON.parse(String(txt).slice(QRC.length)); if (!o || !o.id || !o.R) throw 0; } catch (e) { toast('QR de réception illisible'); beep('bad'); return null; }
+        var L = bons(), i = L.findIndex(function (x) { return x.id === o.id; });
+        if (i < 0) { beep('bad'); toast('Bon ' + (o.n || '') + ' inconnu ici : il a été créé sur un autre appareil. Scannez d’abord le QR du bon.', 5000); return null; }
+        var b = L[i];
+        if (b.status === 'recu') { beep('warn'); toast('Bon ' + b.numero + ' déjà intégré le ' + fdate((b.result || {}).validatedAt, true), 4000); return b; }
+        var P = o.P || {}; b.purchase = { amountPaid: P.a, payMode: P.m || 'comptant', fournisseur: P.f || '', validatedAt: new Date(P.at || Date.now()).toISOString(), by: P.by || '', lines: {} };
+        (P.l || []).forEach(function (x, k) { b.purchase.lines[k] = { got: x[0], price: x[1], done: !!x[2] }; });
+        var by = new Date(o.R.at || Date.now()).toISOString(), who = o.R.by || 'téléphone';
+        var r = { counts: {}, extras: [], unknown: [], log: [], justif: {}, startedAt: by, doneAt: by, doneBy: who, fromPhone: true };
+        (o.R.c || []).forEach(function (n, k) { if (num(n) > 0) r.counts[k] = num(n); });
+        (o.R.j || []).forEach(function (a) { r.justif[a[0]] = { reason: rTxt(a[1]), text: a[2] || '', decision: 'valide', qty: num(a[3]), by: who, at: by }; });
+        var Pl = products();
+        (o.R.x || []).forEach(function (a) {
+            var pid = a[1], p = pid != null ? Pl.find(function (x) { return String(x.id) === String(pid); }) : Pl.find(function (x) { return x && x.barcode && sameCode(x.barcode, a[0]); });
+            if (p) r.extras.push({ bc: a[0], pid: p.id, name: p.name, n: num(a[2]), justif: { reason: rTxt(a[3]), text: a[4] || '', decision: 'valide', by: who, at: by } });
+            else r.unknown.push({ bc: a[0], n: num(a[2]) });
+        });
+        r.log.push({ t: Date.now(), bc: 'qr', i: -3, txt: '📲 Vérification reçue du téléphone (' + who + ')' });
+        b.rec = r; b.status = 'verifie'; b.updatedAt = Date.now(); L[i] = b; saveBons(L);
+        return b;
+    }
+    function hash36(t) { var h = 5381; for (var k = 0; k < t.length; k++) h = ((h << 5) + h + t.charCodeAt(k)) | 0; return (h >>> 0).toString(36).slice(0, 5); }
+    function qrParts(T) {
+        if (T.length <= MAXQ) return [T];
+        var n = Math.ceil(T.length / (MAXQ - 20)), sz = Math.ceil(T.length / n), key = hash36(T), out = [];
+        for (var k = 0; k < n; k++) out.push(QCH + key + ':' + (k + 1) + ':' + n + ':' + T.slice(k * sz, (k + 1) * sz));
+        return out;
+    }
+    var PARTS = {};
+    function assemble(code) {
+        var m = /^COVOQ:([0-9a-z]+):(\d+):(\d+):([\s\S]*)$/.exec(code); if (!m) return null;
+        var key = m[1], k = +m[2], n = +m[3], P = PARTS[key] = PARTS[key] || { n: n, got: {} };
+        P.got[k] = m[4]; var have = Object.keys(P.got).length;
+        if (have < n) { var miss = []; for (var q = 1; q <= n; q++) if (!P.got[q]) miss.push(q); beep('ok'); toast('▦ QR ' + have + '/' + n + ' lu — présentez le QR n° ' + miss.join(', '), 2600); camMsg('▦ ' + have + '/' + n + ' — QR suivant…'); return ''; }
+        var T = ''; for (var z = 1; z <= n; z++) T += P.got[z]; delete PARTS[key];
+        return T;
+    }
+    var CAROUSEL = null;
+    function qrSlides(T, size) {
+        var parts = qrParts(T); clearInterval(CAROUSEL);
+        var imgs = parts.map(function (p) { return qrDataURL(p, size || 300); });
+        if (!imgs[0]) return '<div class="empty">QR code indisponible</div>';
+        if (imgs.length === 1) return '<div class="qrbox"><img src="' + imgs[0] + '" alt="QR"></div>';
+        setTimeout(function () {
+            var box = $('qrcar'); if (!box) return; var k = 0, show = function (j) { k = (j + imgs.length) % imgs.length; var im = $('qrcar-img'), lb = $('qrcar-n'); if (!im) { clearInterval(CAROUSEL); return; } im.src = imgs[k]; lb.textContent = 'QR ' + (k + 1) + ' / ' + imgs.length; };
+            show(0); CAROUSEL = setInterval(function () { show(k + 1); }, 1400);
+            box.onclick = function (e) { clearInterval(CAROUSEL); show(k + (e.clientX - box.getBoundingClientRect().left < box.offsetWidth / 2 ? -1 : 1)); };
+        }, 0);
+        return '<div class="qrbox" id="qrcar" style="cursor:pointer"><img id="qrcar-img" alt="QR"><div id="qrcar-n"></div><small style="font-weight:600;color:#64748b">' + imgs.length + ' QR défilent tout seuls : laissez la caméra pointée</small></div>';
     }
     function qrDataURL(text, size) {
         if (typeof qrcode !== 'function') return '';
@@ -235,7 +308,7 @@ var qrcode=function(){function i(t,r){function a(t,r){g=function(t){for(var r=ne
 
     /* ── Modèle : achats et vérification ── */
     function pur(b) { b.purchase = b.purchase || { lines: {}, amountPaid: null, payMode: 'comptant', fournisseur: '', startedAt: null }; b.purchase.lines = b.purchase.lines || {}; return b.purchase; }
-    function pl(b, i) { var P = pur(b); if (!P.lines[i]) { var p = prodOf(b.lines[i].pid); P.lines[i] = { got: null, price: p ? shopPrice(p) : null, done: false }; } return P.lines[i]; }
+    function pl(b, i) { var P = pur(b); if (!P.lines[i]) { var p = prodOf(b.lines[i].pid); P.lines[i] = { got: null, price: p ? shopPrice(p) : (b.lines[i].pr != null && num(b.lines[i].pr) > 0 ? num(b.lines[i].pr) : null), done: false }; } return P.lines[i]; }
     function bought(b, i) { var P = b.purchase; if (!P || !P.validatedAt) return num(b.lines[i].qty); var x = P.lines[i] || {}; return x.done ? num(x.got == null ? b.lines[i].qty : x.got) : 0; }
     function rec(b) { b.rec = b.rec || { counts: {}, extras: [], unknown: [], log: [], justif: {}, startedAt: null }; b.rec.justif = b.rec.justif || {}; return b.rec; }
     function got(b, i) { return num(rec(b).counts[i] || 0); }
@@ -249,12 +322,13 @@ var qrcode=function(){function i(t,r){function a(t,r){g=function(t){for(var r=ne
     }
     function statusPill(b) {
         if (b.status === 'recu') { var R = b.result || {}; return R.justified ? '<span class="pill p-warn">✅ Intégré · ' + R.justified + ' anomalie' + (R.justified > 1 ? 's justifiées' : ' justifiée') + '</span>' : (R.anomalies ? '<span class="pill p-bad">⚠️ Reçu avec anomalies</span>' : '<span class="pill p-ok">✅ Intégré</span>'); }
+        if (b.status === 'verifie') return '<span class="pill p-ok">📲 Vérifié · à injecter dans COVO Pro</span>';
         if (b.status === 'en_cours') return '<span class="pill p-run">📥 Vérification en cours</span>';
         if (b.status === 'achete') return '<span class="pill p-run">🛍️ Acheté · à intégrer</span>';
         if (b.status === 'en_achat') return '<span class="pill p-new">🛒 Achats en cours</span>';
         return '<span class="pill p-new">À acheter</span>';
     }
-    function phase(b) { return b.status === 'recu' ? 'faits' : (b.status === 'achete' || b.status === 'en_cours') ? 'integrer' : 'acheter'; }
+    function phase(b) { return b.status === 'recu' ? 'faits' : (b.status === 'achete' || b.status === 'en_cours' || b.status === 'verifie') ? 'integrer' : 'acheter'; }
 
     /* ── Caméra générique (BarcodeDetector ou ZXing) ── */
     var CAM = null;
@@ -317,6 +391,9 @@ var qrcode=function(){function i(t,r){function a(t,r){g=function(t){for(var r=ne
         if (e.key.length === 1) KB_BUF += e.key;
     });
     function dispatchCode(code) {
+        code = String(code || '').trim();
+        if (code.indexOf(QCH) === 0) { var T = assemble(code); if (!T) return; code = T; }
+        if (code.indexOf(QRC) === 0) { var rb = importRC(code); if (rb) { beep('done'); closeSheet(); openBon(rb.id); if (EMBED && rb.status === 'verifie') setTimeout(askInteg, 250); } return; }
         if (String(code).indexOf(QRP) === 0) { var b = importBon(code); if (b) { beep('ok'); closeSheet(); openBon(b.id); } return; }
         if (VIEW === 'achat') return onAchatCode(code);
         if (VIEW === 'integ') return onIntegCode(code);
@@ -327,7 +404,7 @@ var qrcode=function(){function i(t,r){function a(t,r){g=function(t){for(var r=ne
     /* ════════════ LISTE ════════════ */
     function renderList() {
         VIEW = 'list'; CUR = null; camStop(); closeSheet();
-        setHead('Réception des commandes', 'COVO Pro · ' + (uname() || ''), EMBED ? '' : '<a class="hbtn" href="../app/">COVO Pro</a>');
+        setHead('Réception des commandes', (standalone() ? 'Mode autonome' : 'COVO Pro') + (uname() ? ' · ' + uname() : ''), EMBED || standalone() ? '' : '<a class="hbtn" href="../app/">COVO Pro</a>');
         $('foot').style.display = 'none';
         var L = bons(), q = Q.trim().toLowerCase();
         var G = { acheter: [], integrer: [], faits: [] }; L.forEach(function (b) { G[phase(b)].push(b); });
@@ -337,7 +414,8 @@ var qrcode=function(){function i(t,r){function a(t,r){g=function(t){for(var r=ne
         var h = '<div class="spots">' +
             '<button class="spot" data-spot="acheter"><span class="si">🛒</span><b>Partir aux achats</b><small>Scannez le bon imprimé ou son QR code</small></button>' +
             '<button class="spot s2" data-spot="integrer"><span class="si">📥</span><b>Intégrer un bon acheté</b><small>Au retour : scannez le bon, puis les articles</small></button></div>';
-        if (pend && mine && pend >= mine && !EMBED) h += '<div class="banner warn"><span>📤</span><div>Des modifications sont en attente d’envoi sur Google Drive. Ouvrez <a href="../app/">COVO Pro</a> sur cet appareil : l’envoi se fait automatiquement.</div></div>';
+        if (standalone() && !EMBED) h += '<div class="banner info"><span>📲</span><div style="flex:1"><b>Mode autonome</b> — aucune connexion à COVO Pro n’est nécessaire : le bon arrive par son QR code, et votre réception repart vers COVO Pro par un QR code (Prévisions → 📥 Intégrer).<div class="tools" style="margin:8px 0 0"><input id="me" placeholder="Votre prénom (pour l’historique)" value="' + esc(localStorage.getItem('covo_recep_name') || '') + '"></div></div></div>';
+        if (pend && mine && pend >= mine && !EMBED && !standalone()) h += '<div class="banner warn"><span>📤</span><div>Des modifications sont en attente d’envoi sur Google Drive. Ouvrez <a href="../app/">COVO Pro</a> sur cet appareil : l’envoi se fait automatiquement.</div></div>';
         h += '<div class="seg">' + [['acheter', '🛒 À acheter'], ['integrer', '📥 À intégrer'], ['faits', '✅ Intégrés']].map(function (t) { return '<button data-tl="' + t[0] + '" class="' + (TABL === t[0] ? 'on' : '') + '">' + t[1] + '<i>' + G[t[0]].length + '</i></button>'; }).join('') + '</div>';
         h += '<input class="search" id="q" type="search" placeholder="🔍 N° de bon, article, code-barres…" value="' + esc(Q) + '">';
         h += list.length ? list.map(function (b) {
@@ -348,21 +426,24 @@ var qrcode=function(){function i(t,r){function a(t,r){g=function(t){for(var r=ne
                 '<div class="m">' + fdate(b.date, true) + ' · ' + b.lines.length + ' article' + (b.lines.length > 1 ? 's' : '') + ' · estimé ' + eur(b.total) + (b.createdBy ? ' · ' + esc(b.createdBy) : '') + '</div>' +
                 (sub ? '<div class="bar"><i style="width:' + Math.round(bar * 100) + '%"></i></div><div class="m">' + sub + '</div>' : '') + '</button>';
         }).join('') : '<div class="empty">' + ({ acheter: '📭 Aucun bon à acheter.<br><br>Créez-en un dans COVO Pro : <b>Prévisions → 🖨️ Bon de commande</b>, puis scannez son QR code.', integrer: 'Aucun bon acheté en attente d’intégration.', faits: 'Aucun bon intégré pour le moment.' })[TABL] + '</div>';
-        h += '<div class="banner info" style="margin-top:14px"><span>☁️</span><div>Les bons viennent de <b>COVO Pro → Prévisions</b>. Pour en récupérer un sur ce téléphone : scannez le <b>QR code</b> imprimé sur le bon (ou affiché dans COVO Pro → 📋 Bons), ou ouvrez <a href="../app/">COVO Pro</a> pour synchroniser par Google Drive.</div></div>';
+        if (!standalone()) h += '<div class="banner info" style="margin-top:14px"><span>☁️</span><div>Les bons viennent de <b>COVO Pro → Prévisions</b>. Pour en récupérer un sur ce téléphone : scannez le <b>QR code</b> imprimé sur le bon (ou affiché dans COVO Pro → 📋 Bons), ou ouvrez <a href="../app/">COVO Pro</a> pour synchroniser par Google Drive.</div></div>';
         $('app').innerHTML = h;
+        if ($('me')) $('me').onchange = function () { try { localStorage.setItem('covo_recep_name', this.value.trim()); } catch (e) {} renderList(); };
         $('q').oninput = function () { Q = this.value; var p = this.selectionStart; renderList(); var i = $('q'); i.focus(); try { i.setSelectionRange(p, p); } catch (e) {} };
     }
     function setHead(t, s, act) { $('h-title').textContent = t; $('h-sub').textContent = s; $('h-act').innerHTML = (act || '') + (EMBED ? '<button class="hbtn" id="b-close">✕ Fermer</button>' : ''); if (EMBED) $('b-close').onclick = function () { camStop(); try { parent.postMessage({ covoRecep: 'close' }, '*'); } catch (e) {} }; }
     function openScanSheet(kind) {
-        var t = kind === 'integrer' ? '📥 Intégrer un bon acheté' : '🛒 Récupérer un bon pour les achats';
-        sheet('<h2>' + t + '</h2><div class="sub">Scannez le <b>QR code</b> ou le <b>code-barres</b> du bon (imprimé, ou affiché dans COVO Pro → Prévisions → 📋 Bons), ou saisissez son numéro.</div>' +
+        var t = kind === 'integrer' ? (EMBED ? '📥 Injecter une réception' : '📥 Intégrer un bon acheté') : '🛒 Récupérer un bon pour les achats';
+        var sub = EMBED && kind === 'integrer' ? 'Présentez à la webcam le <b>QR de réception</b> affiché par le téléphone (ou scannez-le à la douchette 2D). Pour vérifier le bon sur cet ordinateur, scannez plutôt son code-barres.' : kind === 'integrer' ? 'Scannez le <b>QR code</b> ou le <b>code-barres</b> du bon acheté, ou saisissez son numéro, puis scannez chaque article.' : 'Scannez le <b>QR code</b> imprimé sur le bon (ou affiché dans COVO Pro → Prévisions → 📋 Bons). Aucune connexion à COVO Pro n’est nécessaire.';
+        sheet('<h2>' + t + '</h2><div class="sub">' + sub + '</div>' +
             camHTML('cam-sheet') + '<div class="tools"><input id="bonno" placeholder="BC-…" autocapitalize="characters"><button id="bonok">OK</button></div><div style="height:10px"></div>' +
             '<button class="big b-pri" id="bon-cam">📷 Scanner avec la caméra</button><div style="height:8px"></div><button class="big b-ghost" id="bonx">Fermer</button>');
-        var go = function (v) { v = (v || '').trim(); if (!v) return; if (v.indexOf(QRP) === 0) { dispatchCode(v); return; } var b = findBonByCode(v) || bons().find(function (x) { return x.numero.toLowerCase().indexOf(v.toLowerCase()) >= 0; }); if (b) { closeSheet(); openBon(b.id); } else { beep('bad'); toast('Aucun bon « ' + v + ' » sur cet appareil — scannez son QR code', 3500); } };
+        var go = function (v) { v = (v || '').trim(); if (!v) return; if (v.indexOf(QRP) === 0 || v.indexOf(QRC) === 0 || v.indexOf(QCH) === 0) { dispatchCode(v); return; } var b = findBonByCode(v) || bons().find(function (x) { return x.numero.toLowerCase().indexOf(v.toLowerCase()) >= 0; }); if (b) { closeSheet(); openBon(b.id); } else { beep('bad'); toast('Aucun bon « ' + v + ' » sur cet appareil — scannez son QR code', 3500); } };
         $('bonok').onclick = function () { go($('bonno').value); }; $('bonno').onkeydown = function (e) { if (e.key === 'Enter') go(this.value); };
         $('bon-cam').onclick = function () { camToggle('cam-sheet', function (c) { go(c); }); };
         $('bonx').onclick = closeSheet;
-        if (!('ontouchstart' in window)) $('bonno').focus(); else camToggle('cam-sheet', function (c) { go(c); });
+        if (EMBED) { $('bonno').focus(); camToggle('cam-sheet', function (c) { go(c); }); }
+        else if (!('ontouchstart' in window)) $('bonno').focus(); else camToggle('cam-sheet', function (c) { go(c); });
     }
 
     /* ════════════ OUVERTURE ════════════ */
@@ -371,7 +452,7 @@ var qrcode=function(){function i(t,r){function a(t,r){g=function(t){for(var r=ne
         CUR = id; FLT = 'all'; camStop(); closeSheet();
         var sh = $('shell'); if (sh) sh.removeAttribute('data-id');
         var ph = phase(b);
-        if (ph === 'faits') renderReport(b); else if (ph === 'integrer') { VIEW = 'integ'; renderInteg(); } else { VIEW = 'achat'; renderAchat(); }
+        if (ph === 'faits') renderReport(b); else if (b.status === 'verifie' && !EMBED) renderDone(b); else if (ph === 'integrer') { VIEW = 'integ'; renderInteg(); } else { VIEW = 'achat'; renderAchat(); }
         window.scrollTo(0, 0);
     }
 
@@ -411,7 +492,7 @@ var qrcode=function(){function i(t,r){function a(t,r){g=function(t){for(var r=ne
         hitLine();
     }
     function achatLine(b, r) {
-        var l = r.l, x = r.x, q = x.got == null ? num(l.qty) : num(x.got), p = prodOf(l.pid), cur = shopPrice(p), price = x.price == null ? cur : num(x.price);
+        var l = r.l, x = r.x, q = x.got == null ? num(l.qty) : num(x.got), p = prodOf(l.pid), cur = p ? shopPrice(p) : num(l.pr), price = x.price == null ? cur : num(x.price);
         var cost = l.cost == null ? null : num(l.cost), mg = cost != null && price > 0 ? Math.round((price - cost) / price * 100) : null;
         var nf = x.done && q === 0;
         return '<div class="ln ' + (x.done ? (nf ? 'st-manque' : 'st-ok') : '') + '" data-i="' + r.i + '"><div><div class="nm">' + esc(l.name) + '</div><div class="bc">' + (l.bc ? '🔢 ' + esc(l.bc) : 'sans code-barres') + ' · commandé ' + fq(l.qty, l.kg) + (cost != null ? ' · achat estimé ' + eur(cost) : '') + '</div></div>' +
@@ -430,7 +511,7 @@ var qrcode=function(){function i(t,r){function a(t,r){g=function(t){for(var r=ne
     }
     function onAchatCode(raw) {
         var code = digits(raw); if (!code) return;
-        if (code.indexOf(QRP) === 0) return dispatchCode(raw);
+        if (/^COVO(BC1|RC1|Q):/.test(code)) return dispatchCode(raw);
         var b = getBon(CUR); if (!b) return;
         var other = findBonByCode(code); if (other && other.id !== b.id) { if (confirm('Ouvrir le bon ' + other.numero + ' ?')) openBon(other.id); return; }
         var i = b.lines.findIndex(function (l) { return l.bc && sameCode(l.bc, code); });
@@ -454,7 +535,7 @@ var qrcode=function(){function i(t,r){function a(t,r){g=function(t){for(var r=ne
         $('v-ok').onclick = function () {
             var bb = getBon(CUR), PP = pur(bb); bb.lines.forEach(function (l, i) { var x = pl(bb, i); if (!x.done) { x.done = true; x.got = 0; } else if (x.got == null) x.got = num(l.qty); });
             PP.validatedAt = new Date().toISOString(); PP.by = uname(); bb.status = 'achete'; putBon(bb); closeSheet(); camStop(); beep('done');
-            showQR(bb, '🛍️ Achats validés', 'Au retour, scannez ce bon (QR ou code-barres) à l’emplacement « 📥 Intégrer un bon acheté » — sur ce téléphone ou dans COVO Pro.');
+            showQR(bb, '🛍️ Achats validés', 'Au retour : ouvrez ce bon (onglet 📥 À intégrer) et scannez chaque article. À la fin, l’appli affichera le QR de réception à présenter à COVO Pro.');
             TABL = 'integrer';
         };
     }
@@ -479,6 +560,7 @@ var qrcode=function(){function i(t,r){function a(t,r){g=function(t){for(var r=ne
             $('b-undo').onclick = undo;
         }
         var pct = s.n ? (s.ok + s.just) / s.n : 0;
+        if (r.fromPhone && !$('i-phone')) $('i-sum').insertAdjacentHTML('beforebegin', '<div class="banner ok" id="i-phone"><span>📲</span><div>Vérification reçue du téléphone (' + esc(r.doneBy || '—') + ', ' + fdate(r.doneAt, true) + '). Contrôlez puis cliquez sur <b>📥 Intégrer</b>.</div></div>');
         $('i-sum').innerHTML = ring(pct, s.anom > 0).replace('%RIGHT%', '<div class="cnts"><div><b class="ok">' + (s.ok + s.just) + '</b><small>Vérifiés</small></div><div><b class="warn">' + (s.manque + s.todo) + '</b><small>Manques</small></div><div><b class="bad">' + (s.bad + s.extrasOpen) + '</b><small>Anomalies</small></div></div>');
         $('i-chips').innerHTML = [['all', 'Tous'], ['open', '🟠 À vérifier'], ['ok', '✅ Vérifiés'], ['anom', '⚠️ Anomalies']].map(function (c) { var n = c[0] === 'all' ? s.n : c[0] === 'ok' ? s.ok + s.just : c[0] === 'anom' ? s.bad + s.manque + s.extrasOpen : s.todo + s.manque; return '<button data-f="' + c[0] + '" class="' + (FLT === c[0] ? 'on' : '') + '">' + c[1] + ' · ' + n + '</button>'; }).join('');
         var rows = [];
@@ -518,7 +600,7 @@ var qrcode=function(){function i(t,r){function a(t,r){g=function(t){for(var r=ne
     }
     function onIntegCode(raw) {
         var code = digits(raw); if (!code) return;
-        if (code.indexOf(QRP) === 0) return dispatchCode(raw);
+        if (/^COVO(BC1|RC1|Q):/.test(code)) return dispatchCode(raw);
         var b = getBon(CUR); if (!b || b.status === 'recu') return;
         var other = findBonByCode(code); if (other) { if (other.id !== b.id && confirm('Ouvrir le bon ' + other.numero + ' ?')) openBon(other.id); return; }
         var r = rec(b); if (!r.startedAt) r.startedAt = new Date().toISOString(); b.status = 'en_cours';
@@ -535,6 +617,7 @@ var qrcode=function(){function i(t,r){function a(t,r){g=function(t){for(var r=ne
         } else {
             var p = products().find(function (x) { return x && x.barcode && sameCode(x.barcode, code); });
             if (p) { var e = r.extras.find(function (x) { return sameCode(x.bc, code); }); if (e) { e.n++; e.justif = null; } else r.extras.push({ bc: code, pid: p.id, name: p.name, n: 1 }); res = ['bad', '⚠️', 'Hors bon : ' + p.name, 'Article non prévu — à justifier ou retirer']; }
+            else if (!products().length) { var e2 = r.extras.find(function (x) { return sameCode(x.bc, code); }); if (e2) { e2.n++; e2.justif = null; } else r.extras.push({ bc: code, pid: null, name: 'Article ' + code, n: 1 }); res = ['bad', '⚠️', 'Hors bon : ' + code, 'Article non prévu — à justifier (rattaché par son code-barres dans COVO Pro) ou retirer']; }
             else { var u = r.unknown.find(function (x) { return x.bc === code; }); if (u) u.n++; else r.unknown.push({ bc: code, n: 1 }); res = ['bad', '❓', 'Code inconnu', code + ' ne correspond à aucun article']; }
             r.log.push({ t: Date.now(), bc: code, i: -1, txt: res[2] });
         }
@@ -555,6 +638,7 @@ var qrcode=function(){function i(t,r){function a(t,r){g=function(t){for(var r=ne
                 '<button class="big b-pri" id="v-f">Voir les anomalies</button><div style="height:8px"></div><button class="big b-ghost" id="v-x">Fermer</button>');
             $('v-x').onclick = closeSheet; $('v-f').onclick = function () { closeSheet(); FLT = 'anom'; renderInteg(); }; return;
         }
+        if (!EMBED) { askFinish(b); return; }
         var P = b.purchase || {}, changes = [];
         b.lines.forEach(function (l, i) { var x = P.lines && P.lines[i]; var p = prodOf(l.pid); if (x && p && num(x.price) > 0 && Math.abs(num(x.price) - shopPrice(p)) > .004 && got(b, i) > 0) changes.push(l.name + ' : ' + eur(shopPrice(p)) + ' → ' + eur(x.price)); });
         var nJ = Object.keys(r.justif).filter(function (k) { return r.justif[k].decision === 'valide'; }).length + r.extras.filter(function (e) { return e.justif && e.justif.decision === 'valide'; }).length;
@@ -565,6 +649,38 @@ var qrcode=function(){function i(t,r){function a(t,r){g=function(t){for(var r=ne
         h += '<button class="big b-ok" id="v-ok">Intégrer maintenant</button><div style="height:8px"></div><button class="big b-ghost" id="v-x">Annuler</button>';
         sheet(h); $('v-x').onclick = closeSheet;
         $('v-ok').onclick = function () { var o = { stock: $('o-stock').checked, price: $('o-price').checked, appro: $('o-appro').checked }; try { localStorage.setItem('covo_recep_opts', JSON.stringify(o)); } catch (e) {} integrate(o); };
+    }
+    function askFinish(b) {
+        var r = rec(b), nJ = Object.keys(r.justif).filter(function (k) { return r.justif[k].decision === 'valide'; }).length + r.extras.filter(function (e) { return e.justif && e.justif.decision === 'valide'; }).length;
+        var h = '<h2>✅ Vérification terminée</h2><div class="sub">' + esc(b.numero) + ' · tout est vérifié' + (nJ ? ' · ' + nJ + ' anomalie(s) justifiée(s)' : '') + '.<br>Validez pour obtenir le <b>QR de réception</b> : dans COVO Pro, cliquez sur <b>📥 Intégrer</b> (Prévisions) et présentez-le à la webcam.</div>';
+        h += '<button class="big b-ok" id="f-qr">📲 Valider et afficher le QR pour COVO Pro</button><div style="height:8px"></div>';
+        if (hasCatalog()) h += '<button class="big b-pri" id="f-here">📥 Intégrer directement sur ce téléphone</button><div style="height:8px"></div>';
+        h += '<button class="big b-ghost" id="v-x">Annuler</button>';
+        sheet(h); $('v-x').onclick = closeSheet;
+        $('f-qr').onclick = function () { var bb = getBon(CUR), rr = rec(bb); rr.doneAt = new Date().toISOString(); rr.doneBy = uname(); bb.status = 'verifie'; putBon(bb); closeSheet(); camStop(); beep('done'); renderDone(bb); };
+        if ($('f-here')) $('f-here').onclick = function () { closeSheet(); askIntegHere(); };
+    }
+    function askIntegHere() { var save = EMBED; EMBED = true; try { askInteg(); } finally { EMBED = save; } }
+    function renderDone(b) {
+        VIEW = 'done'; CUR = b.id; camStop();
+        var s = istats(b), r = rec(b), P = b.purchase || {};
+        setHead('📲 ' + b.numero, 'Vérifié · à injecter dans COVO Pro', '<button class="hbtn" id="b-back">← Bons</button>'); $('b-back').onclick = renderList;
+        var h = '<div class="banner ok"><span>✅</span><div><b>Réception vérifiée</b> par ' + esc(r.doneBy || uname() || '—') + ' le ' + fdate(r.doneAt, true) + '.<br>' + (s.ok + s.just) + ' article(s) vérifié(s)' + (s.just ? ' dont ' + s.just + ' anomalie(s) justifiée(s)' : '') + (P.amountPaid != null ? ' · payé ' + eur(P.amountPaid) + ' (' + (PAY[P.payMode] || '') + ')' : '') + '</div></div>';
+        h += '<div class="money"><h3>📥 Injecter dans COVO Pro</h3><ol style="margin:4px 0 10px;padding-left:20px;line-height:1.5"><li>Dans COVO Pro : <b>Prévisions → 📥 Intégrer</b> (ou 📋 Bons → 📷 Webcam).</li><li>Présentez ce QR code à la webcam.</li><li>Contrôlez puis cliquez sur <b>Intégrer maintenant</b> : stock, prix de vente et achat sont mis à jour.</li></ol>' + qrSlides(packRC(b), 300) + '</div>';
+        h += '<div class="money"><h3>📋 Détail</h3>' + b.lines.map(function (l, i) { var e = bought(b, i), g = got(b, i), J1 = r.justif[i]; if (e === 0 && g === 0) return ''; return '<div class="r"><span>' + esc(l.name) + (J1 && J1.decision === 'valide' ? '<br><small class="warn">📝 ' + esc(J1.reason) + (J1.text ? ' — ' + esc(J1.text) : '') + '</small>' : '') + '</span><b class="' + (Math.abs(g - e) < 1e-9 ? 'ok' : 'warn') + '">' + fq(g, l.kg) + ' / ' + fq(e, l.kg) + '</b></div>'; }).join('') + '</div>';
+        $('app').innerHTML = h;
+        $('foot').style.display = '';
+        $('foot-in').innerHTML = '<button class="big b-ghost" id="d-edit">↺ Reprendre</button><button class="big b-ok" id="d-done">✅ Injecté dans COVO Pro</button>';
+        $('d-edit').onclick = function () { var bb = getBon(CUR); bb.status = 'en_cours'; delete rec(bb).doneAt; putBon(bb); clearInterval(CAROUSEL); VIEW = 'integ'; renderInteg(); };
+        $('d-done').onclick = function () {
+            var bb = getBon(CUR), rr = rec(bb), PP = bb.purchase || {}; clearInterval(CAROUSEL);
+            var received = bb.lines.map(function (l, i) { var J1 = rr.justif[i]; return { pid: l.pid, name: l.name, bc: l.bc, qty: num(l.qty), bought: bought(bb, i), got: got(bb, i), justif: J1 && J1.decision === 'valide' ? { reason: J1.reason, text: J1.text || '', by: J1.by } : null }; });
+            bb.status = 'recu';
+            bb.result = { validatedAt: new Date().toISOString(), by: rr.doneBy || uname(), remote: true, received: received, extras: rr.extras.filter(function (e) { return e.justif && e.justif.decision === 'valide'; }).map(function (e) { return { name: e.name, bc: e.bc, n: e.n, justif: e.justif }; }),
+                justified: received.filter(function (x) { return x.justif; }).length, anomalies: 0, amountPaid: PP.amountPaid, payMode: PP.payMode, fournisseur: PP.fournisseur || '', amountExpected: num(bb.total), stockUpdated: false, stockLines: 0, priceChanges: [] };
+            putBon(bb); beep('done'); toast('✅ ' + bb.numero + ' classé dans « Intégrés »'); renderReport(bb);
+        };
+        window.scrollTo(0, 0);
     }
     function integrate(o) {
         var b = getBon(CUR); if (!b) return; var r = rec(b), P = b.purchase || {}, now = new Date(), who = uname() || 'réception';
@@ -624,7 +740,7 @@ var qrcode=function(){function i(t,r){function a(t,r){g=function(t){for(var r=ne
         var R = b.result || {}, P = b.purchase || {};
         setHead('✅ ' + b.numero, 'Intégré le ' + fdate(R.validatedAt, true), '<button class="hbtn" id="b-back">← Bons</button>'); $('b-back').onclick = renderList;
         var h = '<div class="sum" style="grid-template-columns:1fr"><div style="display:flex;justify-content:space-between;align-items:center;gap:10px"><b style="font-size:1.05rem">Rapport</b>' + statusPill(b) + '</div>' +
-            '<div style="font-size:.85rem;color:var(--mute)">Achats : ' + (P.validatedAt ? fdate(P.validatedAt, true) + ' par ' + esc(P.by || '—') : '—') + '<br>Intégration par ' + esc(R.by || '—') + (R.stockUpdated ? ' · stock (' + R.stockLines + ' article' + (R.stockLines > 1 ? 's' : '') + ')' : '') + ((R.priceChanges || []).length ? ' · ' + R.priceChanges.length + ' prix de vente' : '') + (R.approId ? ' · achat enregistré dans Approvisionnement Pro' : '') + '</div></div>';
+            '<div style="font-size:.85rem;color:var(--mute)">Achats : ' + (P.validatedAt ? fdate(P.validatedAt, true) + ' par ' + esc(P.by || '—') : '—') + '<br>' + (R.remote ? 'Vérifié sur ce téléphone, injecté dans COVO Pro par QR code' : 'Intégration par ' + esc(R.by || '—')) + (R.stockUpdated ? ' · stock (' + R.stockLines + ' article' + (R.stockLines > 1 ? 's' : '') + ')' : '') + ((R.priceChanges || []).length ? ' · ' + R.priceChanges.length + ' prix de vente' : '') + (R.approId ? ' · achat enregistré dans Approvisionnement Pro' : '') + '</div></div>';
         h += '<div class="money"><h3>💶 Achat</h3><div class="r"><span>Montant estimé du bon</span><b>' + eur(R.amountExpected) + '</b></div><div class="r"><span>Montant payé</span><b>' + (R.amountPaid == null ? '—' : eur(R.amountPaid) + ' · ' + (PAY[R.payMode] || '')) + '</b></div>' + (R.fournisseur ? '<div class="r"><span>Fournisseur</span><b>' + esc(R.fournisseur) + '</b></div>' : '') + '</div>';
         var just = (R.received || []).filter(function (x) { return x.justif; });
         if (just.length || (R.extras || []).length) h += '<div class="money" style="border-color:rgba(217,119,6,.45)"><h3 class="warn">📝 Anomalies justifiées</h3>' + just.map(function (x) { return '<div class="r"><span>' + esc(x.name) + '<br><small class="mute">' + esc(x.justif.reason) + (x.justif.text ? ' — ' + esc(x.justif.text) : '') + '</small></span><b class="warn">' + fq(x.got) + ' / ' + fq(x.bought) + '</b></div>'; }).join('') + (R.extras || []).map(function (x) { return '<div class="r"><span>Hors bon — ' + esc(x.name) + '<br><small class="mute">' + esc(x.justif.reason) + '</small></span><b class="warn">× ' + x.n + '</b></div>'; }).join('') + '</div>';
@@ -650,11 +766,11 @@ var qrcode=function(){function i(t,r){function a(t,r){g=function(t){for(var r=ne
 
     /* ── QR du bon ── */
     function showQR(b, title, sub) {
-        if (!b) return; var txt = packBon(b), url = qrDataURL(txt, 280);
+        if (!b) return; var txt = packBon(b);
         sheet('<h2>' + (title || '▦ ' + esc(b.numero)) + '</h2><div class="sub">' + (sub || 'Scannez ce QR code avec l’appli Réception d’un autre téléphone ou à l’emplacement d’intégration de COVO Pro : le bon y est récupéré avec ses achats, sans attendre Google Drive.') + '</div>' +
-            (url ? '<div class="qrbox"><img src="' + url + '" alt="QR du bon"><div>' + esc(b.numero) + '</div></div>' : '<div class="empty">QR code indisponible</div>') +
+            qrSlides(txt, 280) + '<div style="text-align:center;font-family:monospace;font-weight:800;margin:-6px 0 12px">' + esc(b.numero) + '</div>' +
             '<button class="big b-pri" id="q-x">' + (title ? 'Retour aux bons' : 'Fermer') + '</button>');
-        $('q-x').onclick = function () { closeSheet(); if (title) renderList(); };
+        $('q-x').onclick = function () { clearInterval(CAROUSEL); closeSheet(); if (title) renderList(); };
     }
 
     /* ── Utilitaires d'affichage ── */
@@ -728,17 +844,18 @@ var qrcode=function(){function i(t,r){function a(t,r){g=function(t){for(var r=ne
     }
     function boot() {
         theme(); pwa(); if (EMBED) document.body.classList.add('embed');
-        if (!user()) {
+        if (!user() && EMBED) {
             setHead('Réception des commandes', 'COVO Pro', '');
             $('app').innerHTML = '<div class="gate"><div class="ic">🔐</div><h2>Connexion nécessaire</h2><p style="color:var(--mute)">Connectez-vous d’abord à COVO Pro sur cet appareil : la Réception utilise le même compte et ses données.</p><a class="big b-pri" style="text-decoration:none;display:block" href="../app/">Ouvrir COVO Pro</a></div>';
             return;
         }
-        var q = QS.get('bon'), mode = QS.get('scan');
+        var q = QS.get('bon'), mode = QS.get('scan'), rc = QS.get('rc');
+        if (rc) { dispatchCode(rc); if (VIEW !== 'list') return; }
         if (q) { var b = q.indexOf(QRP) === 0 ? importBon(q) : bons().find(function (x) { return x.id === q || x.numero === q; }); if (b) { openBon(b.id); return; } toast('Bon « ' + q + ' » introuvable sur cet appareil', 3500); }
         if (mode === 'integrer' || mode === 'acheter') { TABL = mode; renderList(); openScanSheet(mode); return; }
         renderList();
     }
-    window._recep = { code: dispatchCode, open: openBon, list: renderList, pack: function (id) { return packBon(getBon(id)); }, importBon: importBon };
+    window._recep = { code: dispatchCode, open: openBon, list: renderList, pack: function (id) { return packBon(getBon(id)); }, packRC: function (id) { return packRC(getBon(id)); }, parts: qrParts, importBon: importBon };
     boot();
 })();
 </script>

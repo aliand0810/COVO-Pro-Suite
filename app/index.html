@@ -63718,7 +63718,7 @@ function covoQrPrint(o) {
     }
     /* Plan de réassort */
     function renderPlan() {
-        $('pv-plan').innerHTML = '<div class="pv-tools"><input type="search" id="pv-q" placeholder="🔍 Rechercher un produit, une catégorie, un code-barres…" value="' + esc(ui.q) + '"><button type="button" class="pv-btn" data-act="copy" title="Copier la liste à commander">📋 Copier</button><button type="button" class="pv-btn" data-act="bons" title="Bons de commande : QR, réimpression, emplacement d’intégration">📋 Bons' + recepBadge() + '</button><button type="button" class="pv-btn" data-act="recep" title="Ouvrir l’appli Réception (téléphone)">📲 Réception</button><button type="button" class="pv-btn pri" data-act="print">🖨️ Bon de commande</button></div>'
+        $('pv-plan').innerHTML = '<div class="pv-tools"><input type="search" id="pv-q" placeholder="🔍 Rechercher un produit, une catégorie, un code-barres…" value="' + esc(ui.q) + '"><button type="button" class="pv-btn" data-act="copy" title="Copier la liste à commander">📋 Copier</button><button type="button" class="pv-btn" data-act="bons" title="Bons de commande : QR, réimpression, emplacement d’intégration">📋 Bons' + recepBadge() + '</button><button type="button" class="pv-btn" data-act="integ" title="Injecter une réception vérifiée sur le téléphone : présentez son QR à la webcam" style="background:#047857;color:#fff;border-color:#047857">📥 Intégrer</button><button type="button" class="pv-btn" data-act="recep" title="Ouvrir l’appli Réception (téléphone)">📲 Réception</button><button type="button" class="pv-btn pri" data-act="print">🖨️ Bon de commande</button></div>'
             + '<div class="pv-chips" id="pv-chips"></div><div class="pv-table" id="pv-tbl"></div>';
         renderTable();
     }
@@ -63814,6 +63814,7 @@ function covoQrPrint(o) {
         if ((b = e.target.closest('[data-act="print"]'))) { printOrder(); return; }
         if ((b = e.target.closest('[data-act="recep"]'))) { window.open(new URL('../reception/', location.href).href, '_blank'); return; }
         if ((b = e.target.closest('[data-act="bons"]'))) { openBons(); return; }
+        if ((b = e.target.closest('[data-act="integ"]'))) { recepFrame('scan=integrer'); return; }
         if ((b = e.target.closest('tr[data-pid], .pv-dorm [data-pid]'))) { openProd(b.getAttribute('data-pid')); return; }
     }
     function toast(m, t) { if (typeof showScanToast === 'function') showScanToast(m, t || 'info'); }
@@ -63857,10 +63858,12 @@ function covoQrPrint(o) {
     /* ── Bons de commande : liste, QR, réimpression, emplacement d'intégration (appli Réception intégrée) ── */
     var BCQ = 'COVOBC1:';
     function bonsAll() { try { var L = JSON.parse(localStorage.getItem('covo_bons_commande') || '[]'); return Array.isArray(L) ? L : []; } catch (e) { return []; } }
+    var PMAP = {};
     function packBon(b) {
+        PMAP = {}; try { ((typeof products !== 'undefined' && Array.isArray(products)) ? products : JSON.parse(localStorage.getItem('covo_products') || '[]')).forEach(function (p) { if (p) PMAP[String(p.id)] = p; }); } catch (e) {}
         var P = b.purchase || null, n2 = function (v) { return Math.round((parseFloat(v) || 0) * 100) / 100; };
         var o = { v: 1, id: b.id, n: b.numero, d: Date.parse(b.date) || 0, t: n2(b.total), s: b.status, c: b.createdBy || '', u: b.updatedAt || Date.parse(b.date) || 0,
-            L: (b.lines || []).map(function (l) { return [l.pid, String(l.name || '').slice(0, 40), l.bc || '', parseFloat(l.qty) || 0, l.kg ? 1 : 0, l.cost == null ? null : n2(l.cost)]; }) };
+            L: (b.lines || []).map(function (l) { var p = PMAP[String(l.pid)], pr = p ? (p.unitType === 'kg' && p.pricePerKg ? p.pricePerKg : p.price) : null; return [l.pid, String(l.name || '').slice(0, 32), l.bc || '', parseFloat(l.qty) || 0, l.kg ? 1 : 0, l.cost == null ? null : n2(l.cost), pr == null ? null : n2(pr)]; }) };
         if (P) o.P = { a: P.amountPaid == null ? null : n2(P.amountPaid), m: P.payMode || '', f: P.fournisseur || '', at: P.validatedAt ? Date.parse(P.validatedAt) : 0, by: P.by || '',
             l: (b.lines || []).map(function (l, i) { var x = (P.lines || {})[i] || {}; return [x.got == null ? null : parseFloat(x.got), x.price == null ? null : n2(x.price), x.done ? 1 : 0]; }) };
         return BCQ + JSON.stringify(o);
@@ -63879,7 +63882,21 @@ function covoQrPrint(o) {
         } catch (e) { return ''; }
     }
 
-    var BST = { a_recevoir: ['À acheter', '#4338ca'], en_achat: ['🛒 Achats en cours', '#4338ca'], achete: ['🛍️ Acheté · à intégrer', '#1d6fc7'], en_cours: ['📥 Vérification', '#1d6fc7'], recu: ['✅ Intégré', '#15803d'] };
+    /* Longs bons : plusieurs QR (COVOQ:clé:k:n:…) recomposés par l'appli Réception ou par l'emplacement d'intégration */
+    var RCQ = 'COVORC1:', QCH = 'COVOQ:', MAXQ = 620, QPARTS = {};
+    function qrParts(T) {
+        if (T.length <= MAXQ) return [T];
+        var h = 5381; for (var k = 0; k < T.length; k++) h = ((h << 5) + h + T.charCodeAt(k)) | 0;
+        var key = (h >>> 0).toString(36).slice(0, 5), n = Math.ceil(T.length / (MAXQ - 20)), sz = Math.ceil(T.length / n), out = [];
+        for (var j = 0; j < n; j++) out.push(QCH + key + ':' + (j + 1) + ':' + n + ':' + T.slice(j * sz, (j + 1) * sz));
+        return out;
+    }
+    function qrImgs(T, size) { return qrParts(T).map(function (p) { return qrURL(p, size); }).filter(Boolean); }
+    function qrPrintBlock(T, px) {
+        var im = qrImgs(T, 300); if (!im.length) return '';
+        return '<div style="float:right;margin-right:14px;text-align:center;font-family:Courier New,monospace;font-size:10px;max-width:' + (im.length > 1 ? 3 * (px + 8) : px + 8) + 'px">' + im.map(function (u, i) { return '<div style="display:inline-block;margin:0 3px 3px"><img src="' + u + '" style="width:' + px + 'px;height:' + px + 'px;display:block">' + (im.length > 1 ? (i + 1) + '/' + im.length : '') + '</div>'; }).join('') + '<div>QR' + (im.length > 1 ? ' (' + im.length + ', à scanner l’un après l’autre)' : '') + ' : appli Réception</div></div>';
+    }
+    var BST = { a_recevoir: ['À acheter', '#4338ca'], en_achat: ['🛒 Achats en cours', '#4338ca'], achete: ['🛍️ Acheté · à intégrer', '#1d6fc7'], en_cours: ['📥 Vérification', '#1d6fc7'], verifie: ['📲 Vérifié · à injecter', '#0f766e'], recu: ['✅ Intégré', '#15803d'] };
     function bonState(b) { var s = BST[b.status] || BST.a_recevoir, R = b.result || {}; if (b.status === 'recu' && (R.justified || R.anomalies)) return ['✅ Intégré · ' + (R.justified || R.anomalies) + ' anomalie(s)', '#b45309']; return s; }
     function recepFrame(q) {
         var old = document.getElementById('pv-recep-ov'); if (old) old.remove();
@@ -63895,6 +63912,13 @@ function covoQrPrint(o) {
     });
     function integSpot(v) {
         v = String(v || '').trim(); if (!v) return;
+        if (v.indexOf(QCH) === 0) {
+            var m = /^COVOQ:([0-9a-z]+):(\d+):(\d+):([\s\S]*)$/.exec(v); if (!m) return;
+            var P = QPARTS[m[1]] = QPARTS[m[1]] || {}, n = +m[3]; P[+m[2]] = m[4]; var have = Object.keys(P).length, st = document.getElementById('pv-integ-st');
+            if (have < n) { if (st) st.textContent = '▦ QR ' + have + '/' + n + ' lu — scannez le suivant'; return; }
+            var T = ''; for (var k = 1; k <= n; k++) T += P[k]; delete QPARTS[m[1]]; if (st) st.textContent = ''; v = T;
+        }
+        if (v.indexOf(RCQ) === 0) { recepFrame('rc=' + encodeURIComponent(v)); return; }
         if (v.indexOf(BCQ) === 0) { recepFrame('bon=' + encodeURIComponent(v)); return; }
         var b = bonsAll().filter(function (x) { return String(x.numero).toLowerCase() === v.toLowerCase() || x.id === v; })[0];
         if (!b) { toast('Bon « ' + v + ' » inconnu sur cet ordinateur — scannez le QR affiché par le téléphone (webcam)', 'info'); return; }
@@ -63902,15 +63926,15 @@ function covoQrPrint(o) {
     }
     function printBon(b) {
         var shop = ''; try { shop = (appSettings && (appSettings.companyName || appSettings.shopName)) || ''; } catch (e) {}
-        var qr = qrURL(packBon(b), 260), bc = bcCell(b.numero).replace(/^<b>[^<]*<\/b>/, '');
+        var bc = bcCell(b.numero).replace(/^<b>[^<]*<\/b>/, '');
         var html = '<!DOCTYPE html><html lang="fr"><head><meta charset="utf-8"><title>Bon de commande ' + esc(b.numero) + '</title><style>body{font-family:Arial,sans-serif;color:#0f172a;padding:28px;font-size:12px}h1{font-size:20px;margin:0 0 4px}table{width:100%;border-collapse:collapse;margin-top:14px}th{background:#1e1b4b;color:#fff;text-align:left;padding:8px}td{padding:7px 8px;border-bottom:1px solid #e5e7eb}.r{text-align:right}.bc{font-family:Courier New,monospace;font-size:11.5px;white-space:nowrap}.bc svg{display:block;height:30px;width:auto;max-width:160px;margin-top:3px}.b{display:inline-block;width:14px;height:14px;border:1.5px solid #555;border-radius:3px}@media print{button{display:none}}</style></head><body>'
             + '<button onclick="window.print()" style="float:right;padding:8px 14px;border:none;border-radius:8px;background:#4338ca;color:#fff;font-weight:700;cursor:pointer">🖨️ Imprimer</button>'
-            + '<div style="float:right;margin-right:16px;text-align:center;font-family:Courier New,monospace;font-size:10px">' + (qr ? '<img src="' + qr + '" style="width:120px;height:120px;display:block">' : '') + 'QR : appli Réception</div>'
+            + qrPrintBlock(packBon(b), 150)
             + '<div style="float:right;margin-right:16px;text-align:center;font-family:Courier New,monospace;font-size:11px">' + bc + '<div>' + esc(b.numero) + '</div></div>'
             + '<h1>Bon de commande ' + esc(b.numero) + '</h1><p>' + esc(shop) + ' · ' + new Date(b.date).toLocaleDateString('fr-FR', { day: '2-digit', month: 'long', year: 'numeric' }) + (b.createdBy ? ' · ' + esc(b.createdBy) : '') + '</p>'
             + '<table><thead><tr><th></th><th>Produit</th><th>Code-barres</th><th class="r">Quantité</th><th class="r">Achat estimé</th><th class="r">Prix de vente</th></tr></thead><tbody>'
             + (b.lines || []).map(function (l) { return '<tr><td><span class="b"></span></td><td><b>' + esc(l.name) + '</b></td><td class="bc">' + bcCell(l.bc) + '</td><td class="r"><b>' + num(l.qty, 1) + (l.kg ? ' kg' : '') + '</b></td><td class="r">' + (l.buy ? eur(l.buy, 2) : '—') + '</td><td class="r">________</td></tr>'; }).join('')
-            + '</tbody></table><p style="margin-top:14px;color:#555">📲 Appli <b>Réception</b> : scannez le QR pour récupérer le bon, cochez les articles et notez les prix de vente pendant les achats ; au retour, rescannez le bon à l’emplacement « 📥 Intégrer un bon acheté ».</p></body></html>';
+            + '</tbody></table><p style="margin-top:14px;color:#555">📲 Appli <b>Réception</b> : scannez le QR pour récupérer le bon, cochez les articles et notez les prix de vente pendant les achats ; au retour, scannez chaque article avec l’appli, puis présentez le QR de réception à COVO Pro (Prévisions → 📥 Intégrer).</p></body></html>';
         var w = window.open('', '_blank'); if (!w) { toast('Autorisez les fenêtres pop-up pour imprimer', 'info'); return; }
         w.document.write(html); w.document.close();
     }
@@ -63918,11 +63942,11 @@ function covoQrPrint(o) {
         var L = bonsAll(), old = document.getElementById('pv-bons-ov'); if (old) old.remove();
         var ov = document.createElement('div'); ov.id = 'pv-bons-ov';
         ov.style.cssText = 'position:fixed;inset:0;z-index:99700;background:rgba(15,23,42,.55);display:flex;align-items:center;justify-content:center;padding:16px';
-        var rows = L.map(function (b) { var st = bonState(b); return '<tr data-bid="' + esc(b.id) + '"><td><b>' + esc(b.numero) + '</b><br><small style="color:#64748b">' + new Date(b.date).toLocaleString('fr-FR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) + (b.createdBy ? ' · ' + esc(b.createdBy) : '') + '</small></td><td style="text-align:right">' + (b.lines || []).length + '</td><td style="text-align:right">' + eur(b.total, 2) + (b.purchase && b.purchase.amountPaid != null ? '<br><small style="color:#64748b">payé ' + eur(b.purchase.amountPaid, 2) + '</small>' : '') + '</td><td><span style="display:inline-block;padding:3px 9px;border-radius:12px;font-size:11px;font-weight:800;color:#fff;background:' + st[1] + '">' + st[0] + '</span></td><td style="white-space:nowrap;text-align:right"><button data-bact="qr" title="QR code à scanner avec l’appli Réception">▦ QR</button> <button data-bact="print" title="Réimprimer">🖨️</button> <button data-bact="open" title="Ouvrir dans Réception">' + (b.status === 'recu' ? '📄 Rapport' : (b.status === 'achete' || b.status === 'en_cours') ? '📥 Intégrer' : '📂 Ouvrir') + '</button> <button data-bact="del" title="Supprimer">🗑️</button></td></tr>'; }).join('');
+        var rows = L.map(function (b) { var st = bonState(b); return '<tr data-bid="' + esc(b.id) + '"><td><b>' + esc(b.numero) + '</b><br><small style="color:#64748b">' + new Date(b.date).toLocaleString('fr-FR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) + (b.createdBy ? ' · ' + esc(b.createdBy) : '') + '</small></td><td style="text-align:right">' + (b.lines || []).length + '</td><td style="text-align:right">' + eur(b.total, 2) + (b.purchase && b.purchase.amountPaid != null ? '<br><small style="color:#64748b">payé ' + eur(b.purchase.amountPaid, 2) + '</small>' : '') + '</td><td><span style="display:inline-block;padding:3px 9px;border-radius:12px;font-size:11px;font-weight:800;color:#fff;background:' + st[1] + '">' + st[0] + '</span></td><td style="white-space:nowrap;text-align:right"><button data-bact="qr" title="QR code à scanner avec l’appli Réception">▦ QR</button> <button data-bact="print" title="Réimprimer">🖨️</button> <button data-bact="open" title="Ouvrir dans Réception">' + (b.status === 'recu' ? '📄 Rapport' : (b.status === 'achete' || b.status === 'en_cours' || b.status === 'verifie') ? '📥 Intégrer' : '📂 Ouvrir') + '</button> <button data-bact="del" title="Supprimer">🗑️</button></td></tr>'; }).join('');
         ov.innerHTML = '<div style="background:var(--pv-surface,#fff);color:var(--pv-ink,#0f172a);width:min(900px,100%);max-height:90vh;overflow:auto;border-radius:18px;padding:18px 20px;box-shadow:0 24px 70px rgba(0,0,0,.35)">'
             + '<div style="display:flex;align-items:center;gap:10px;margin-bottom:12px"><h3 style="margin:0;flex:1">📋 Bons de commande</h3><button data-bact="close" style="border:none;background:#e2e8f0;border-radius:10px;padding:7px 12px;font-weight:800;cursor:pointer">✕</button></div>'
-            + '<div style="background:linear-gradient(135deg,#047857,#10b981);color:#fff;border-radius:14px;padding:14px;margin-bottom:14px"><b style="font-size:15px">📥 Emplacement d’intégration</b><div style="font-size:12.5px;opacity:.92;margin:3px 0 9px">Au retour des achats : scannez le bon acheté (douchette : code-barres du bon ; webcam : QR affiché par le téléphone).</div>'
-            + '<div style="display:flex;gap:8px;flex-wrap:wrap"><input id="pv-integ-in" placeholder="Scanner ou saisir le n° du bon (BC-…)" style="flex:1;min-width:200px;padding:10px 12px;border-radius:10px;border:none;font-size:14px;color:#0f172a"><button data-bact="integ-go" style="border:none;border-radius:10px;padding:0 14px;font-weight:800;cursor:pointer">OK</button><button data-bact="integ-cam" style="border:none;border-radius:10px;padding:0 14px;font-weight:800;cursor:pointer">📷 Webcam</button></div></div>'
+            + '<div style="background:linear-gradient(135deg,#047857,#10b981);color:#fff;border-radius:14px;padding:14px;margin-bottom:14px"><b style="font-size:15px">📥 Emplacement d’intégration</b><div style="font-size:12.5px;opacity:.92;margin:3px 0 9px">Au retour des achats : présentez le <b>QR de réception</b> affiché par le téléphone (📷 Webcam ou douchette 2D) — la vérification faite sur le téléphone est injectée ici. Vous pouvez aussi scanner le code-barres du bon pour le vérifier sur cet ordinateur.</div>'
+            + '<div style="display:flex;gap:8px;flex-wrap:wrap"><input id="pv-integ-in" placeholder="Scanner ou saisir le n° du bon (BC-…)" style="flex:1;min-width:200px;padding:10px 12px;border-radius:10px;border:none;font-size:14px;color:#0f172a"><button data-bact="integ-go" style="border:none;border-radius:10px;padding:0 14px;font-weight:800;cursor:pointer">OK</button><button data-bact="integ-cam" style="border:none;border-radius:10px;padding:0 14px;font-weight:800;cursor:pointer">📷 Webcam</button></div><div id="pv-integ-st" style="font-size:12px;font-weight:700;margin-top:6px"></div></div>'
             + (L.length ? '<table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr style="text-align:left;color:#64748b;font-size:11px;text-transform:uppercase"><th>Bon</th><th style="text-align:right">Articles</th><th style="text-align:right">Montant</th><th>Statut</th><th></th></tr></thead><tbody>' + rows + '</tbody></table>' : '<p style="text-align:center;color:#64748b;padding:20px">Aucun bon : cliquez sur « 🖨️ Bon de commande » pour en créer un.</p>')
             + '<div id="pv-bons-qr"></div></div>';
         document.body.appendChild(ov);
@@ -63938,22 +63962,22 @@ function covoQrPrint(o) {
             else if (a === 'integ-cam') recepFrame('scan=integrer');
             else if (a === 'print' && bon) printBon(bon);
             else if (a === 'open' && bon) recepFrame('bon=' + encodeURIComponent(bon.id));
-            else if (a === 'qr' && bon) { var u = qrURL(packBon(bon), 300); document.getElementById('pv-bons-qr').innerHTML = '<div style="text-align:center;margin-top:16px;padding:14px;border:1px dashed #94a3b8;border-radius:14px"><b>' + esc(bon.numero) + '</b><div style="font-size:12px;color:#64748b;margin:4px 0 10px">Scannez ce QR avec l’appli Réception du téléphone pour récupérer le bon.</div>' + (u ? '<img src="' + u + '" style="width:260px;height:260px;image-rendering:pixelated;background:#fff;padding:8px;border-radius:10px">' : 'QR indisponible') + '</div>'; document.getElementById('pv-bons-qr').scrollIntoView({ behavior: 'smooth', block: 'center' }); }
+            else if (a === 'qr' && bon) { var U = qrImgs(packBon(bon), 300); document.getElementById('pv-bons-qr').innerHTML = '<div style="text-align:center;margin-top:16px;padding:14px;border:1px dashed #94a3b8;border-radius:14px"><b>' + esc(bon.numero) + '</b><div style="font-size:12px;color:#64748b;margin:4px 0 10px">Scannez ce QR avec l’appli Réception du téléphone pour récupérer le bon' + (U.length > 1 ? ' (' + U.length + ' QR défilent : laissez le téléphone pointé)' : '') + '.</div>' + (U.length ? '<img id="pv-qr-img" src="' + U[0] + '" style="width:260px;height:260px;image-rendering:pixelated;background:#fff;padding:8px;border-radius:10px"><div id="pv-qr-n" style="font-weight:800">' + (U.length > 1 ? 'QR 1 / ' + U.length : '') + '</div>' : 'QR indisponible') + '</div>'; clearInterval(window._pvQrT); if (U.length > 1) { var qk = 0; window._pvQrT = setInterval(function () { var im = document.getElementById('pv-qr-img'); if (!im) { clearInterval(window._pvQrT); return; } qk = (qk + 1) % U.length; im.src = U[qk]; document.getElementById('pv-qr-n').textContent = 'QR ' + (qk + 1) + ' / ' + U.length; }, 1400); } document.getElementById('pv-bons-qr').scrollIntoView({ behavior: 'smooth', block: 'center' }); }
             else if (a === 'del' && bon) { if (!confirm('Supprimer le bon ' + bon.numero + ' ?' + (bon.status === 'recu' ? '\n(Le stock et les achats déjà intégrés ne sont pas modifiés.)' : ''))) return; var all = bonsAll().filter(function (x) { return x.id !== bon.id; }); localStorage.setItem('covo_bons_commande', JSON.stringify(all)); openBons(); try { renderPlan(); } catch (x) {} }
         });
     }
     function printOrder() {
         var L = orderLines(); if (!L.length) { toast('Rien à commander', 'info'); return; }
         var shop = ''; try { shop = (appSettings && (appSettings.companyName || appSettings.shopName)) || ''; } catch (e) {}
-        var bon = saveBon(L, shop), bonBc = bon ? bcCell(bon.numero).replace(/^<b>[^<]*<\/b>/, '') : '', bonQr = bon ? qrURL(packBon(bon), 240) : '';
+        var bon = saveBon(L, shop), bonBc = bon ? bcCell(bon.numero).replace(/^<b>[^<]*<\/b>/, '') : '', bonQr = bon ? qrPrintBlock(packBon(bon), 150) : '';
         var html = '<!DOCTYPE html><html lang="fr"><head><meta charset="utf-8"><title>Bon de commande</title><style>body{font-family:Arial,sans-serif;color:#0f172a;padding:28px;font-size:12px}h1{font-size:20px;margin:0 0 4px}p{margin:0 0 16px;color:#555}table{width:100%;border-collapse:collapse}th{background:#1e1b4b;color:#fff;text-align:left;padding:8px}td{padding:7px 8px;border-bottom:1px solid #e5e7eb}td.r,th.r{text-align:right}tfoot td{font-weight:900;font-size:13px;border-top:2px solid #1e1b4b}.b{display:inline-block;width:14px;height:14px;border:1.5px solid #555;border-radius:3px}.bc{font-family:Courier New,monospace;font-size:11.5px;white-space:nowrap}.bc svg{display:block;height:30px;width:auto;max-width:160px;margin-top:3px}@media print{button{display:none}}</style></head><body>'
             + '<button onclick="window.print()" style="float:right;padding:8px 14px;border:none;border-radius:8px;background:#4338ca;color:#fff;font-weight:700;cursor:pointer">🖨️ Imprimer</button>'
-            + (bonQr ? '<div style="float:right;margin-right:14px;text-align:center;font-family:Courier New,monospace;font-size:10px"><img src="' + bonQr + '" style="width:112px;height:112px;display:block">QR : appli Réception</div>' : '') + '<div style="float:right;margin-right:14px;text-align:center;font-family:Courier New,monospace;font-size:11px">' + bonBc + (bon ? '<div>' + esc(bon.numero) + '</div>' : '') + '</div>'
+            + bonQr + '<div style="float:right;margin-right:14px;text-align:center;font-family:Courier New,monospace;font-size:11px">' + bonBc + (bon ? '<div>' + esc(bon.numero) + '</div>' : '') + '</div>'
             + '<h1>Bon de commande' + (bon ? ' ' + esc(bon.numero) : '') + '</h1><p>' + esc(shop) + ' · ' + new Date().toLocaleDateString('fr-FR', { day: '2-digit', month: 'long', year: 'numeric' }) + ' · couverture ' + last.H + ' jours + 3 j de délai</p>'
             + '<table><thead><tr><th></th><th>Produit</th><th>Code-barres</th><th>Catégorie</th><th class="r">Stock</th><th class="r">Ventes/j</th><th class="r">Rupture</th><th class="r">Quantité</th><th class="r">Coût estimé</th></tr></thead><tbody>'
             + L.map(function (r) { return '<tr><td><span class="b"></span></td><td><b>' + esc(r.name) + '</b></td><td class="bc">' + bcCell(r.bc) + '</td><td>' + esc(r.cat) + '</td><td class="r">' + num(r.stock, 2) + '</td><td class="r">' + num(r.avg, 2) + '</td><td class="r">' + (r.stock <= 0 ? 'En rupture' : r.out ? fmtD(r.out) : '—') + '</td><td class="r"><b>' + num(r.order, 1) + (r.kg ? ' kg' : '') + '</b></td><td class="r">' + (r.buy ? eur(r.buy, 2) : '—') + '</td></tr>'; }).join('')
             + '</tbody><tfoot><tr><td colspan="8">Total estimé</td><td class="r">' + eur(last.budget, 2) + '</td></tr></tfoot></table>'
-            + '<p style="margin-top:14px;color:#555">📲 Appli <b>Réception</b> : scannez le QR pour récupérer le bon, cochez les articles et notez les prix de vente pendant les achats ; au retour, rescannez le bon à l’emplacement « 📥 Intégrer un bon acheté ».</p></body></html>';
+            + '<p style="margin-top:14px;color:#555">📲 Appli <b>Réception</b> : scannez le QR pour récupérer le bon, cochez les articles et notez les prix de vente pendant les achats ; au retour, scannez chaque article avec l’appli, puis présentez le QR de réception à COVO Pro (Prévisions → 📥 Intégrer).</p></body></html>';
         var w = window.open('', '_blank'); if (!w) { toast('Autorisez les fenêtres pop-up pour imprimer', 'info'); return; }
         w.document.write(html); w.document.close();
     }
@@ -73293,7 +73317,7 @@ function covoQrPrint(o) {
             ['💤', 'Stock dormant', 'Articles sans vente sur 30 jours et la valeur immobilisée.']
         ],
         steps: [
-            { t: 'Faire les achats avec le téléphone', s: ['Imprimez le bon avec [[🖨️ Bon de commande]] (ou ouvrez [[📋 Bons]] → [[▦ QR]]).', 'Dans l’appli Réception : [[🛒 Partir aux achats]], scannez le QR du bon.', 'Au magasin, cochez chaque article pris (ou scannez-le), ajustez la quantité et notez le **prix de vente boutique**.', 'Saisissez le fournisseur, le mode de paiement et le montant payé, puis [[✅ Valider les achats]].'] }, { t: 'Intégrer un bon acheté', s: ['Au retour, scannez le bon à l’emplacement [[📥 Intégrer un bon acheté]] (appli) ou dans [[📋 Bons]] (douchette / webcam).', 'Scannez chaque article : moins que la quantité achetée = manque, la quantité = vérifié, au-delà = anomalie (excédent / fuite).', 'Chaque anomalie doit être **justifiée** (motif) puis validée, ou corrigée.', 'Cliquez sur [[📥 Intégrer]] : stock, prix de vente et achat dans Approvisionnement Pro sont mis à jour.'] }, { t: 'Préparer une commande fournisseur', s: ['Réglez **Analyse** (30 j conseillé) et **Horizon** (le délai jusqu’à votre prochaine commande, ex. 14 j).', 'Regardez le **Plan de réassort** : filtrez [[🛒 À commander]], [[Urgent]], [[Attention]]…', 'Vérifiez les quantités conseillées.', 'Cliquez sur [[🖨️ Bon de commande]] pour l’imprimer ou [[📋 Copier]] pour le coller dans un message au fournisseur.'] },
+            { t: 'Faire les achats avec le téléphone', s: ['Imprimez le bon avec [[🖨️ Bon de commande]] (ou ouvrez [[📋 Bons]] → [[▦ QR]]).', 'Dans l’appli Réception : [[🛒 Partir aux achats]], scannez le QR du bon.', 'Au magasin, cochez chaque article pris (ou scannez-le), ajustez la quantité et notez le **prix de vente boutique**.', 'Saisissez le fournisseur, le mode de paiement et le montant payé, puis [[✅ Valider les achats]].'] }, { t: 'Intégrer un bon acheté', s: ['Au retour, dans l’appli (sans connexion à COVO Pro) : ouvrez le bon et scannez chaque article — moins que la quantité achetée = manque, la quantité = vérifié, au-delà = anomalie (excédent / fuite).', 'Chaque anomalie doit être **justifiée** (motif) puis validée, ou corrigée ; l’appli affiche alors le **QR de réception**.', 'Dans COVO Pro, cliquez sur [[📥 Intégrer]] et présentez ce QR à la webcam (ou à la douchette 2D).', 'Contrôlez puis [[Intégrer maintenant]] : stock, prix de vente et achat dans Approvisionnement Pro sont mis à jour.'] }, { t: 'Préparer une commande fournisseur', s: ['Réglez **Analyse** (30 j conseillé) et **Horizon** (le délai jusqu’à votre prochaine commande, ex. 14 j).', 'Regardez le **Plan de réassort** : filtrez [[🛒 À commander]], [[Urgent]], [[Attention]]…', 'Vérifiez les quantités conseillées.', 'Cliquez sur [[🖨️ Bon de commande]] pour l’imprimer ou [[📋 Copier]] pour le coller dans un message au fournisseur.'] },
             { t: 'Repérer les urgences', s: ['Lisez la carte **🔴 Ruptures d’ici 7 jours**.', 'Dans **Santé du stock**, cliquez sur 🔴 Urgent : le plan de réassort se filtre sur ces articles.', 'Consultez la **Frise des ruptures** pour voir les dates prévues.'] },
             { t: 'Réduire le stock dormant', s: ['Descendez jusqu’à **💤 Stock dormant** : articles sans vente et valeur immobilisée.', 'Envisagez une promotion (onglet Produits → Modifier → Promotion) ou une promo fidélité (Catalogue).', 'Évitez de recommander ces articles.'] }
         ],
