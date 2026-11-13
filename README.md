@@ -16,21 +16,30 @@ COVO Pro et tous ses satellites réunis dans **un seul dépôt**, comme Restaura
 ├── projets/        ← Projets Pro (+ icônes, manifest, service worker)
 ├── admin/          ← Admin Pro
 ├── visites/        ← Visites Pro
+├── reception/      ← Réception Pro (téléphone : achats et intégration des bons de commande)
 └── .nojekyll
 ```
 
-## Mise en ligne (GitHub Pages)
+## Mise en ligne dans le dépôt **Covo-pro**
 
-1. Créez un nouveau dépôt public, par exemple **COVO-Pro-Suite**
-   (« COVO-Pro » n'est pas possible : le dépôt « Covo-pro » existe déjà et GitHub ignore les majuscules).
-2. Envoyez **le contenu** de ce dossier à la racine du dépôt (index.html à la racine).
-3. Settings → Pages → Deploy from a branch → `main` / `(root)` → Save.
-4. En ligne après 1–2 min :
-   - COVO Pro : `https://aliand0810.github.io/COVO-Pro-Suite/` (→ `app/`)
-   - Caisse Pro : `https://aliand0810.github.io/COVO-Pro-Suite/caisse/`
-   - Fidélité Pro : `…/fidelite/`, Gestion Pro : `…/gestion/`, etc.
+1. Dans le dépôt `Covo-pro`, **remplacez** `index.html` à la racine par celui de ce dossier.
+2. Ajoutez les dossiers `app/`, `caisse/`, `fidelite/`, `gestion/`, `appro/`, `finances/`,
+   `historique/`, `clotures/`, `projets/`, `admin/`, `visites/` et le fichier `.nojekyll`.
+3. Ne supprimez rien d'autre (CNAME, images… s'il y en a).
+4. Après 1–2 min :
+   - COVO Pro : `https://aliand0810.github.io/Covo-pro/` (→ `app/`, l'ancienne adresse marche toujours)
+   - Caisse Pro : `https://aliand0810.github.io/Covo-pro/caisse/`
+   - Fidélité Pro : `…/Covo-pro/fidelite/`, Gestion Pro : `…/Covo-pro/gestion/`, etc.
 
-Le nom du dépôt est libre : tous les liens entre applications sont **relatifs**.
+L'ancienne adresse `…/Covo-pro/` redirige vers `app/` en gardant les paramètres et les `#…`
+(liens des anciens satellites, application COVO Pro déjà installée).
+Les liens entre applications sont relatifs : le dossier marche aussi dans un autre dépôt.
+
+## Réception Pro (téléphone)
+
+`…/reception/` : achats et intégration des bons de commande créés dans COVO Pro (Prévisions → 🖨️ Bon de commande).
+1. 🛒 Achats : scannez le QR du bon, cochez les articles, notez les prix de vente boutique et le montant payé.
+2. 📥 Intégration : au retour, rescannez le bon (appli ou COVO Pro → 📋 Bons), puis chaque article ; justifiez les anomalies ; intégrez (stock, prix, achat dans Approvisionnement Pro).
 
 ## Données, Drive, licence
 
