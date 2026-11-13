@@ -39,7 +39,7 @@ Les liens entre applications sont relatifs : le dossier marche aussi dans un aut
 
 `…/reception/` : achats et intégration des bons de commande créés dans COVO Pro (Prévisions → 🖨️ Bon de commande).
 Le téléphone n’a pas besoin d’être connecté à COVO Pro : le bon arrive par son QR code et la réception repart par un QR code.
-1. 🛒 Achats : scannez le QR du bon, cochez les articles, notez les prix de vente boutique et le montant payé.
+1. 🛒 Achats : COVO Pro → Prévisions → 📲 Envoyer au téléphone, visez le QR avec l’appareil photo du téléphone (l’appli s’ouvre avec le bon) ; puis, cochez les articles, notez les prix de vente boutique et le montant payé.
 2. 📥 Vérification (appli) : au retour, ouvrez le bon et scannez chaque article ; justifiez les anomalies ; l’appli affiche le QR de réception.
 3. 📥 Intégration (COVO Pro) : Prévisions → 📥 Intégrer, présentez le QR à la webcam : stock, prix de vente et achat dans Approvisionnement Pro sont mis à jour.
 

@@ -63718,7 +63718,7 @@ function covoQrPrint(o) {
     }
     /* Plan de réassort */
     function renderPlan() {
-        $('pv-plan').innerHTML = '<div class="pv-tools"><input type="search" id="pv-q" placeholder="🔍 Rechercher un produit, une catégorie, un code-barres…" value="' + esc(ui.q) + '"><button type="button" class="pv-btn" data-act="copy" title="Copier la liste à commander">📋 Copier</button><button type="button" class="pv-btn" data-act="bons" title="Bons de commande : QR, réimpression, emplacement d’intégration">📋 Bons' + recepBadge() + '</button><button type="button" class="pv-btn" data-act="integ" title="Injecter une réception vérifiée sur le téléphone : présentez son QR à la webcam" style="background:#047857;color:#fff;border-color:#047857">📥 Intégrer</button><button type="button" class="pv-btn" data-act="recep" title="Ouvrir l’appli Réception (téléphone)">📲 Réception</button><button type="button" class="pv-btn pri" data-act="print">🖨️ Bon de commande</button></div>'
+        $('pv-plan').innerHTML = '<div class="pv-tools"><input type="search" id="pv-q" placeholder="🔍 Rechercher un produit, une catégorie, un code-barres…" value="' + esc(ui.q) + '"><button type="button" class="pv-btn" data-act="copy" title="Copier la liste à commander">📋 Copier</button><button type="button" class="pv-btn" data-act="bons" title="Bons de commande : QR, réimpression, emplacement d’intégration">📋 Bons' + recepBadge() + '</button><button type="button" class="pv-btn" data-act="integ" title="Injecter une réception vérifiée sur le téléphone : présentez son QR à la webcam" style="background:#047857;color:#fff;border-color:#047857">📥 Intégrer</button><button type="button" class="pv-btn" data-act="recep" title="Ouvrir l’appli Réception (téléphone)">📲 Réception</button><button type="button" class="pv-btn pri" data-act="send" title="Envoyer le bon au téléphone : QR à viser avec l’appareil photo" style="background:#047857;border-color:#047857">📲 Envoyer au téléphone</button><button type="button" class="pv-btn pri" data-act="print">🖨️ Bon de commande</button></div>'
             + '<div class="pv-chips" id="pv-chips"></div><div class="pv-table" id="pv-tbl"></div>';
         renderTable();
     }
@@ -63815,6 +63815,7 @@ function covoQrPrint(o) {
         if ((b = e.target.closest('[data-act="recep"]'))) { window.open(new URL('../reception/', location.href).href, '_blank'); return; }
         if ((b = e.target.closest('[data-act="bons"]'))) { openBons(); return; }
         if ((b = e.target.closest('[data-act="integ"]'))) { recepFrame('scan=integrer'); return; }
+        if ((b = e.target.closest('[data-act="send"]'))) { sendCurrent(); return; }
         if ((b = e.target.closest('tr[data-pid], .pv-dorm [data-pid]'))) { openProd(b.getAttribute('data-pid')); return; }
     }
     function toast(m, t) { if (typeof showScanToast === 'function') showScanToast(m, t || 'info'); }
@@ -63894,7 +63895,72 @@ function covoQrPrint(o) {
     function qrImgs(T, size) { return qrParts(T).map(function (p) { return qrURL(p, size); }).filter(Boolean); }
     function qrPrintBlock(T, px) {
         var im = qrImgs(T, 300); if (!im.length) return '';
-        return '<div style="float:right;margin-right:14px;text-align:center;font-family:Courier New,monospace;font-size:10px;max-width:' + (im.length > 1 ? 3 * (px + 8) : px + 8) + 'px">' + im.map(function (u, i) { return '<div style="display:inline-block;margin:0 3px 3px"><img src="' + u + '" style="width:' + px + 'px;height:' + px + 'px;display:block">' + (im.length > 1 ? (i + 1) + '/' + im.length : '') + '</div>'; }).join('') + '<div>QR' + (im.length > 1 ? ' (' + im.length + ', à scanner l’un après l’autre)' : '') + ' : appli Réception</div></div>';
+        return '<div id="bon-qr" style="float:right;margin-right:14px;text-align:center;font-family:Courier New,monospace;font-size:10px;max-width:' + (im.length > 1 ? 3 * (px + 8) : px + 8) + 'px">' + im.map(function (u, i) { return '<div style="display:inline-block;margin:0 3px 3px"><img src="' + u + '" style="width:' + px + 'px;height:' + px + 'px;display:block">' + (im.length > 1 ? (i + 1) + '/' + im.length : '') + '</div>'; }).join('') + '<div>QR' + (im.length > 1 ? ' (' + im.length + ', à scanner l’un après l’autre)' : '') + ' : appli Réception</div></div>';
+    }
+    /* ── 📲 Envoyer au téléphone (v4) : QR « appareil photo » = adresse de l'appli Réception + bon compressé.
+       Le téléphone vise le QR avec son appareil photo normal → l'appli Réception s'ouvre avec le bon. ── */
+    var LINK_MAX = 1900, LINK_PRINT_MAX = 1500;
+    function recepBase() { return /^https?:$/.test(location.protocol) ? new URL('../reception/', location.href).href : 'https://aliand0810.github.io/Covo-pro/reception/'; }
+    function b64u(bytes) { var bin = ''; for (var k = 0; k < bytes.length; k += 8192) bin += String.fromCharCode.apply(null, bytes.subarray(k, k + 8192)); return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''); }
+    function phoneLink(bon) {
+        var json = packBon(bon).slice(BCQ.length), raw = new TextEncoder().encode(json), base = recepBase() + '#b=';
+        if (typeof CompressionStream !== 'function') return Promise.resolve(base + 'j' + b64u(raw));
+        return new Response(new Blob([raw]).stream().pipeThrough(new CompressionStream('deflate-raw'))).arrayBuffer()
+            .then(function (ab) { return base + 'z' + b64u(new Uint8Array(ab)); })
+            .catch(function () { return base + 'j' + b64u(raw); });
+    }
+    function linkQRInto(w, bon) {   /* bon imprimé : remplace le QR « appli » par le QR « appareil photo » quand il tient */
+        phoneLink(bon).then(function (u) {
+            if (u.length > LINK_PRINT_MAX) return; var d = w && !w.closed && w.document.getElementById('bon-qr'), img = qrURL(u, 420); if (!d || !img) return;
+            d.style.maxWidth = '170px'; d.innerHTML = '<img src="' + img + '" style="width:150px;height:150px;display:block;margin:0 auto">📲 Visez avec l’appareil photo<br>du téléphone (appli Réception)';
+        }).catch(function () {});
+    }
+    function sendToPhone(bon) {
+        if (!bon) return; var old = document.getElementById('pv-send-ov'); if (old) old.remove(); clearInterval(window._pvSendT);
+        var ov = document.createElement('div'); ov.id = 'pv-send-ov';
+        ov.style.cssText = 'position:fixed;inset:0;z-index:99900;background:rgba(15,23,42,.7);display:flex;align-items:center;justify-content:center;padding:16px';
+        ov.innerHTML = '<div style="background:#fff;color:#0f172a;width:min(560px,100%);max-height:94vh;overflow:auto;border-radius:20px;padding:18px 20px;box-shadow:0 24px 70px rgba(0,0,0,.45);text-align:center">'
+            + '<div style="display:flex;align-items:center;gap:10px"><h3 style="margin:0;flex:1;text-align:left;font-size:18px;color:#0f172a">📲 Envoyer au téléphone</h3><button data-sact="close" style="border:none;background:#e2e8f0;border-radius:10px;padding:7px 12px;font-weight:800;cursor:pointer">✕</button></div>'
+            + '<div style="font-family:Courier New,monospace;font-weight:800;font-size:15px;margin:8px 0 2px">' + esc(bon.numero) + '</div><div style="font-size:12px;color:#64748b">' + (bon.lines || []).length + ' article(s) · ' + eur(bon.total, 2) + '</div>'
+            + '<div id="pv-send-qr" style="margin:12px auto;min-height:200px;display:flex;align-items:center;justify-content:center;color:#64748b">Préparation du QR…</div>'
+            + '<div id="pv-send-help"></div>'
+            + '<div id="pv-send-act" style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-top:12px"></div></div>';
+        document.body.appendChild(ov);
+        var close = function () { clearInterval(window._pvSendT); ov.remove(); };
+        ov.addEventListener('click', function (e) { if (e.target === ov || e.target.closest('[data-sact="close"]')) close(); });
+        document.addEventListener('keydown', function esc1(e) { if (e.key === 'Escape') { close(); document.removeEventListener('keydown', esc1); } });
+        var steps = function (a) { return '<ol style="text-align:left;margin:4px auto 0;max-width:420px;padding-left:22px;line-height:1.55;font-size:14px">' + a.map(function (x) { return '<li>' + x + '</li>'; }).join('') + '</ol>'; };
+        var btn = 'border:none;border-radius:12px;padding:11px 16px;font-weight:800;cursor:pointer;font-size:14px';
+        phoneLink(bon).then(function (u) {
+            var box = document.getElementById('pv-send-qr'); if (!box) return;
+            if (u.length <= LINK_MAX && qrURL(u, 460)) {
+                box.innerHTML = '<img src="' + qrURL(u, 460) + '" alt="QR" style="width:min(340px,78vw);height:auto;image-rendering:pixelated;border:1px solid #e2e8f0;border-radius:14px">';
+                document.getElementById('pv-send-help').innerHTML = steps(['Ouvrez l’<b>appareil photo</b> du téléphone (ou l’appli Réception → 🛒 Partir aux achats).', 'Visez ce QR code, puis touchez le lien qui apparaît.', 'L’appli <b>Réception</b> s’ouvre avec le bon : il ne reste qu’à faire les achats.'])
+                    + (/^https?:$/.test(location.protocol) ? '' : '<p style="font-size:12px;color:#b45309;margin:8px 0 0">Ce COVO Pro est ouvert depuis un fichier : le lien ouvre l’appli Réception en ligne (aliand0810.github.io/Covo-pro/reception/).</p>');
+                document.getElementById('pv-send-act').innerHTML = '<button data-sact="copy" style="' + btn + ';background:#e0e7ff;color:#3730a3">🔗 Copier le lien</button>' + (navigator.share ? '<button data-sact="share" style="' + btn + ';background:#e0e7ff;color:#3730a3">📤 Partager</button>' : '') + '<button data-sact="close" style="' + btn + ';background:#4338ca;color:#fff">✓ Terminé</button>';
+                ov.querySelector('[data-sact="copy"]').onclick = function () { var t = this; (navigator.clipboard ? navigator.clipboard.writeText(u) : Promise.reject()).then(function () { t.textContent = '✅ Lien copié'; }).catch(function () { prompt('Lien du bon :', u); }); };
+                var sh = ov.querySelector('[data-sact="share"]'); if (sh) sh.onclick = function () { navigator.share({ title: 'Bon ' + bon.numero, text: 'Bon de commande ' + bon.numero + ' — à ouvrir avec l’appli Réception', url: u }).catch(function () {}); };
+            } else {
+                /* bon trop long pour un seul QR « appareil photo » : QR défilants à lire depuis l'appli Réception */
+                var U = qrImgs(packBon(bon), 460), k = 0;
+                box.innerHTML = '<div><img id="pv-send-img" src="' + U[0] + '" style="width:min(340px,78vw);height:auto;image-rendering:pixelated;border:1px solid #e2e8f0;border-radius:14px"><div id="pv-send-n" style="font-weight:800;margin-top:4px">' + (U.length > 1 ? 'QR 1 / ' + U.length : '') + '</div></div>';
+                if (U.length > 1) window._pvSendT = setInterval(function () { var im = document.getElementById('pv-send-img'); if (!im) { clearInterval(window._pvSendT); return; } k = (k + 1) % U.length; im.src = U[k]; document.getElementById('pv-send-n').textContent = 'QR ' + (k + 1) + ' / ' + U.length; }, 1400);
+                document.getElementById('pv-send-help').innerHTML = '<p style="font-size:12.5px;color:#b45309;margin:0 0 6px">Bon long (' + (bon.lines || []).length + ' articles) : il passe en plusieurs QR, à lire avec l’appli Réception.</p>' + steps(['Sur le téléphone, ouvrez l’appli <b>Réception</b> → 🛒 Partir aux achats.', 'Laissez la caméra pointée sur l’écran : les ' + U.length + ' QR défilent et sont rassemblés tout seuls.']);
+                document.getElementById('pv-send-act').innerHTML = '<button data-sact="close" style="' + btn + ';background:#4338ca;color:#fff">✓ Terminé</button>';
+            }
+        });
+    }
+    function sendCurrent() {   /* bouton Prévisions : enregistre le bon de la commande affichée puis l'envoie */
+        var L = []; try { L = orderLines(); } catch (e) {}
+        if (!L.length) {
+            var last = bonsAll().filter(function (b) { return b.status !== 'recu'; })[0];
+            if (last) { sendToPhone(last); return; }
+            toast('Rien à commander : aucun bon à envoyer', 'info'); return;
+        }
+        var shop = ''; try { shop = (appSettings && (appSettings.companyName || appSettings.shopName)) || ''; } catch (e) {}
+        var bon = saveBon(L, shop); if (!bon) { toast('Bon non enregistré', 'info'); return; }
+        try { renderPlan(); } catch (e) {}
+        sendToPhone(bon);
     }
     var BST = { a_recevoir: ['À acheter', '#4338ca'], en_achat: ['🛒 Achats en cours', '#4338ca'], achete: ['🛍️ Acheté · à intégrer', '#1d6fc7'], en_cours: ['📥 Vérification', '#1d6fc7'], verifie: ['📲 Vérifié · à injecter', '#0f766e'], recu: ['✅ Intégré', '#15803d'] };
     function bonState(b) { var s = BST[b.status] || BST.a_recevoir, R = b.result || {}; if (b.status === 'recu' && (R.justified || R.anomalies)) return ['✅ Intégré · ' + (R.justified || R.anomalies) + ' anomalie(s)', '#b45309']; return s; }
@@ -63936,15 +64002,15 @@ function covoQrPrint(o) {
             + (b.lines || []).map(function (l) { return '<tr><td><span class="b"></span></td><td><b>' + esc(l.name) + '</b></td><td class="bc">' + bcCell(l.bc) + '</td><td class="r"><b>' + num(l.qty, 1) + (l.kg ? ' kg' : '') + '</b></td><td class="r">' + (l.buy ? eur(l.buy, 2) : '—') + '</td><td class="r">________</td></tr>'; }).join('')
             + '</tbody></table><p style="margin-top:14px;color:#555">📲 Appli <b>Réception</b> : scannez le QR pour récupérer le bon, cochez les articles et notez les prix de vente pendant les achats ; au retour, scannez chaque article avec l’appli, puis présentez le QR de réception à COVO Pro (Prévisions → 📥 Intégrer).</p></body></html>';
         var w = window.open('', '_blank'); if (!w) { toast('Autorisez les fenêtres pop-up pour imprimer', 'info'); return; }
-        w.document.write(html); w.document.close();
+        w.document.write(html); w.document.close(); linkQRInto(w, b);
     }
     function openBons() {
         var L = bonsAll(), old = document.getElementById('pv-bons-ov'); if (old) old.remove();
         var ov = document.createElement('div'); ov.id = 'pv-bons-ov';
         ov.style.cssText = 'position:fixed;inset:0;z-index:99700;background:rgba(15,23,42,.55);display:flex;align-items:center;justify-content:center;padding:16px';
-        var rows = L.map(function (b) { var st = bonState(b); return '<tr data-bid="' + esc(b.id) + '"><td><b>' + esc(b.numero) + '</b><br><small style="color:#64748b">' + new Date(b.date).toLocaleString('fr-FR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) + (b.createdBy ? ' · ' + esc(b.createdBy) : '') + '</small></td><td style="text-align:right">' + (b.lines || []).length + '</td><td style="text-align:right">' + eur(b.total, 2) + (b.purchase && b.purchase.amountPaid != null ? '<br><small style="color:#64748b">payé ' + eur(b.purchase.amountPaid, 2) + '</small>' : '') + '</td><td><span style="display:inline-block;padding:3px 9px;border-radius:12px;font-size:11px;font-weight:800;color:#fff;background:' + st[1] + '">' + st[0] + '</span></td><td style="white-space:nowrap;text-align:right"><button data-bact="qr" title="QR code à scanner avec l’appli Réception">▦ QR</button> <button data-bact="print" title="Réimprimer">🖨️</button> <button data-bact="open" title="Ouvrir dans Réception">' + (b.status === 'recu' ? '📄 Rapport' : (b.status === 'achete' || b.status === 'en_cours' || b.status === 'verifie') ? '📥 Intégrer' : '📂 Ouvrir') + '</button> <button data-bact="del" title="Supprimer">🗑️</button></td></tr>'; }).join('');
+        var rows = L.map(function (b) { var st = bonState(b); return '<tr data-bid="' + esc(b.id) + '"><td><b>' + esc(b.numero) + '</b><br><small style="color:#64748b">' + new Date(b.date).toLocaleString('fr-FR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) + (b.createdBy ? ' · ' + esc(b.createdBy) : '') + '</small></td><td style="text-align:right">' + (b.lines || []).length + '</td><td style="text-align:right">' + eur(b.total, 2) + (b.purchase && b.purchase.amountPaid != null ? '<br><small style="color:#64748b">payé ' + eur(b.purchase.amountPaid, 2) + '</small>' : '') + '</td><td><span style="display:inline-block;padding:3px 9px;border-radius:12px;font-size:11px;font-weight:800;color:#fff;background:' + st[1] + '">' + st[0] + '</span></td><td style="white-space:nowrap;text-align:right"><button data-bact="qr" title="Envoyer ce bon au téléphone (QR à viser avec l’appareil photo)">📲 Téléphone</button> <button data-bact="print" title="Réimprimer">🖨️</button> <button data-bact="open" title="Ouvrir dans Réception">' + (b.status === 'recu' ? '📄 Rapport' : (b.status === 'achete' || b.status === 'en_cours' || b.status === 'verifie') ? '📥 Intégrer' : '📂 Ouvrir') + '</button> <button data-bact="del" title="Supprimer">🗑️</button></td></tr>'; }).join('');
         ov.innerHTML = '<div style="background:var(--pv-surface,#fff);color:var(--pv-ink,#0f172a);width:min(900px,100%);max-height:90vh;overflow:auto;border-radius:18px;padding:18px 20px;box-shadow:0 24px 70px rgba(0,0,0,.35)">'
-            + '<div style="display:flex;align-items:center;gap:10px;margin-bottom:12px"><h3 style="margin:0;flex:1">📋 Bons de commande</h3><button data-bact="close" style="border:none;background:#e2e8f0;border-radius:10px;padding:7px 12px;font-weight:800;cursor:pointer">✕</button></div>'
+            + '<div style="display:flex;align-items:center;gap:10px;margin-bottom:12px"><h3 style="margin:0;flex:1;color:var(--pv-ink,#0f172a)">📋 Bons de commande</h3><button data-bact="close" style="border:none;background:#e2e8f0;border-radius:10px;padding:7px 12px;font-weight:800;cursor:pointer">✕</button></div>'
             + '<div style="background:linear-gradient(135deg,#047857,#10b981);color:#fff;border-radius:14px;padding:14px;margin-bottom:14px"><b style="font-size:15px">📥 Emplacement d’intégration</b><div style="font-size:12.5px;opacity:.92;margin:3px 0 9px">Au retour des achats : présentez le <b>QR de réception</b> affiché par le téléphone (📷 Webcam ou douchette 2D) — la vérification faite sur le téléphone est injectée ici. Vous pouvez aussi scanner le code-barres du bon pour le vérifier sur cet ordinateur.</div>'
             + '<div style="display:flex;gap:8px;flex-wrap:wrap"><input id="pv-integ-in" placeholder="Scanner ou saisir le n° du bon (BC-…)" style="flex:1;min-width:200px;padding:10px 12px;border-radius:10px;border:none;font-size:14px;color:#0f172a"><button data-bact="integ-go" style="border:none;border-radius:10px;padding:0 14px;font-weight:800;cursor:pointer">OK</button><button data-bact="integ-cam" style="border:none;border-radius:10px;padding:0 14px;font-weight:800;cursor:pointer">📷 Webcam</button></div><div id="pv-integ-st" style="font-size:12px;font-weight:700;margin-top:6px"></div></div>'
             + (L.length ? '<table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr style="text-align:left;color:#64748b;font-size:11px;text-transform:uppercase"><th>Bon</th><th style="text-align:right">Articles</th><th style="text-align:right">Montant</th><th>Statut</th><th></th></tr></thead><tbody>' + rows + '</tbody></table>' : '<p style="text-align:center;color:#64748b;padding:20px">Aucun bon : cliquez sur « 🖨️ Bon de commande » pour en créer un.</p>')
@@ -63962,7 +64028,7 @@ function covoQrPrint(o) {
             else if (a === 'integ-cam') recepFrame('scan=integrer');
             else if (a === 'print' && bon) printBon(bon);
             else if (a === 'open' && bon) recepFrame('bon=' + encodeURIComponent(bon.id));
-            else if (a === 'qr' && bon) { var U = qrImgs(packBon(bon), 300); document.getElementById('pv-bons-qr').innerHTML = '<div style="text-align:center;margin-top:16px;padding:14px;border:1px dashed #94a3b8;border-radius:14px"><b>' + esc(bon.numero) + '</b><div style="font-size:12px;color:#64748b;margin:4px 0 10px">Scannez ce QR avec l’appli Réception du téléphone pour récupérer le bon' + (U.length > 1 ? ' (' + U.length + ' QR défilent : laissez le téléphone pointé)' : '') + '.</div>' + (U.length ? '<img id="pv-qr-img" src="' + U[0] + '" style="width:260px;height:260px;image-rendering:pixelated;background:#fff;padding:8px;border-radius:10px"><div id="pv-qr-n" style="font-weight:800">' + (U.length > 1 ? 'QR 1 / ' + U.length : '') + '</div>' : 'QR indisponible') + '</div>'; clearInterval(window._pvQrT); if (U.length > 1) { var qk = 0; window._pvQrT = setInterval(function () { var im = document.getElementById('pv-qr-img'); if (!im) { clearInterval(window._pvQrT); return; } qk = (qk + 1) % U.length; im.src = U[qk]; document.getElementById('pv-qr-n').textContent = 'QR ' + (qk + 1) + ' / ' + U.length; }, 1400); } document.getElementById('pv-bons-qr').scrollIntoView({ behavior: 'smooth', block: 'center' }); }
+            else if (a === 'qr' && bon) sendToPhone(bon);
             else if (a === 'del' && bon) { if (!confirm('Supprimer le bon ' + bon.numero + ' ?' + (bon.status === 'recu' ? '\n(Le stock et les achats déjà intégrés ne sont pas modifiés.)' : ''))) return; var all = bonsAll().filter(function (x) { return x.id !== bon.id; }); localStorage.setItem('covo_bons_commande', JSON.stringify(all)); openBons(); try { renderPlan(); } catch (x) {} }
         });
     }
@@ -63979,7 +64045,7 @@ function covoQrPrint(o) {
             + '</tbody><tfoot><tr><td colspan="8">Total estimé</td><td class="r">' + eur(last.budget, 2) + '</td></tr></tfoot></table>'
             + '<p style="margin-top:14px;color:#555">📲 Appli <b>Réception</b> : scannez le QR pour récupérer le bon, cochez les articles et notez les prix de vente pendant les achats ; au retour, scannez chaque article avec l’appli, puis présentez le QR de réception à COVO Pro (Prévisions → 📥 Intégrer).</p></body></html>';
         var w = window.open('', '_blank'); if (!w) { toast('Autorisez les fenêtres pop-up pour imprimer', 'info'); return; }
-        w.document.write(html); w.document.close();
+        w.document.write(html); w.document.close(); if (bon) linkQRInto(w, bon);
     }
 
     /* ───────────── Cycle de vie ───────────── */
@@ -73317,7 +73383,7 @@ function covoQrPrint(o) {
             ['💤', 'Stock dormant', 'Articles sans vente sur 30 jours et la valeur immobilisée.']
         ],
         steps: [
-            { t: 'Faire les achats avec le téléphone', s: ['Imprimez le bon avec [[🖨️ Bon de commande]] (ou ouvrez [[📋 Bons]] → [[▦ QR]]).', 'Dans l’appli Réception : [[🛒 Partir aux achats]], scannez le QR du bon.', 'Au magasin, cochez chaque article pris (ou scannez-le), ajustez la quantité et notez le **prix de vente boutique**.', 'Saisissez le fournisseur, le mode de paiement et le montant payé, puis [[✅ Valider les achats]].'] }, { t: 'Intégrer un bon acheté', s: ['Au retour, dans l’appli (sans connexion à COVO Pro) : ouvrez le bon et scannez chaque article — moins que la quantité achetée = manque, la quantité = vérifié, au-delà = anomalie (excédent / fuite).', 'Chaque anomalie doit être **justifiée** (motif) puis validée, ou corrigée ; l’appli affiche alors le **QR de réception**.', 'Dans COVO Pro, cliquez sur [[📥 Intégrer]] et présentez ce QR à la webcam (ou à la douchette 2D).', 'Contrôlez puis [[Intégrer maintenant]] : stock, prix de vente et achat dans Approvisionnement Pro sont mis à jour.'] }, { t: 'Préparer une commande fournisseur', s: ['Réglez **Analyse** (30 j conseillé) et **Horizon** (le délai jusqu’à votre prochaine commande, ex. 14 j).', 'Regardez le **Plan de réassort** : filtrez [[🛒 À commander]], [[Urgent]], [[Attention]]…', 'Vérifiez les quantités conseillées.', 'Cliquez sur [[🖨️ Bon de commande]] pour l’imprimer ou [[📋 Copier]] pour le coller dans un message au fournisseur.'] },
+            { t: 'Faire les achats avec le téléphone', s: ['Cliquez sur [[📲 Envoyer au téléphone]] (ou [[📋 Bons]] → [[📲 Téléphone]]) : un grand QR code s’affiche.', 'Visez-le avec l’**appareil photo** du téléphone et touchez le lien : l’appli Réception s’ouvre avec le bon (le QR du bon imprimé fonctionne de la même façon).', 'Au magasin, cochez chaque article pris (ou scannez-le), ajustez la quantité et notez le **prix de vente boutique**.', 'Saisissez le fournisseur, le mode de paiement et le montant payé, puis [[✅ Valider les achats]].'] }, { t: 'Intégrer un bon acheté', s: ['Au retour, dans l’appli (sans connexion à COVO Pro) : ouvrez le bon et scannez chaque article — moins que la quantité achetée = manque, la quantité = vérifié, au-delà = anomalie (excédent / fuite).', 'Chaque anomalie doit être **justifiée** (motif) puis validée, ou corrigée ; l’appli affiche alors le **QR de réception**.', 'Dans COVO Pro, cliquez sur [[📥 Intégrer]] et présentez ce QR à la webcam (ou à la douchette 2D).', 'Contrôlez puis [[Intégrer maintenant]] : stock, prix de vente et achat dans Approvisionnement Pro sont mis à jour.'] }, { t: 'Préparer une commande fournisseur', s: ['Réglez **Analyse** (30 j conseillé) et **Horizon** (le délai jusqu’à votre prochaine commande, ex. 14 j).', 'Regardez le **Plan de réassort** : filtrez [[🛒 À commander]], [[Urgent]], [[Attention]]…', 'Vérifiez les quantités conseillées.', 'Cliquez sur [[🖨️ Bon de commande]] pour l’imprimer ou [[📋 Copier]] pour le coller dans un message au fournisseur.'] },
             { t: 'Repérer les urgences', s: ['Lisez la carte **🔴 Ruptures d’ici 7 jours**.', 'Dans **Santé du stock**, cliquez sur 🔴 Urgent : le plan de réassort se filtre sur ces articles.', 'Consultez la **Frise des ruptures** pour voir les dates prévues.'] },
             { t: 'Réduire le stock dormant', s: ['Descendez jusqu’à **💤 Stock dormant** : articles sans vente et valeur immobilisée.', 'Envisagez une promotion (onglet Produits → Modifier → Promotion) ou une promo fidélité (Catalogue).', 'Évitez de recommander ces articles.'] }
         ],

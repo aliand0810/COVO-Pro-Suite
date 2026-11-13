@@ -216,6 +216,24 @@ var qrcode=function(){function i(t,r){function a(t,r){g=function(t){for(var r=ne
         if (o.P) { b.purchase = { amountPaid: o.P.a, payMode: o.P.m, fournisseur: o.P.f, validatedAt: o.P.at ? new Date(o.P.at).toISOString() : null, by: o.P.by, lines: {} }; (o.P.l || []).forEach(function (x, i) { b.purchase.lines[i] = { got: x[0], price: x[1], done: !!x[2] }; }); }
         return b;
     }
+    /* Lien « appareil photo » (v4) : COVO Pro affiche un QR contenant l'adresse de l'appli + le bon compressé.
+       L'appareil photo du téléphone ouvre directement l'appli avec le bon, sans rien installer ni se connecter. */
+    function b64uBytes(t) { t = String(t).replace(/-/g, '+').replace(/_/g, '/'); while (t.length % 4) t += '='; var bin = atob(t), u = new Uint8Array(bin.length); for (var k = 0; k < bin.length; k++) u[k] = bin.charCodeAt(k); return u; }
+    function linkPayload(str) { var m = /[#&?]b=([zj])([A-Za-z0-9_-]+)/.exec(String(str || '')); return m ? { z: m[1] === 'z', d: m[2] } : null; }
+    function decodeLink(str) {
+        var lp = linkPayload(str); if (!lp) return Promise.reject(new Error('lien'));
+        var bytes = b64uBytes(lp.d);
+        if (!lp.z) return Promise.resolve(QRP + new TextDecoder().decode(bytes));
+        if (typeof DecompressionStream !== 'function') return Promise.reject(new Error('Navigateur trop ancien pour ce QR : mettez-le à jour ou scannez le QR depuis l’appli'));
+        return new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate-raw'))).text().then(function (t) { return QRP + t; });
+    }
+    function openFromLink(str, fromHash) {
+        return decodeLink(str).then(function (txt) {
+            if (fromHash) try { history.replaceState(null, '', location.pathname + location.search); } catch (e) {}
+            var b = importBon(txt); if (b) { beep('ok'); closeSheet(); openBon(b.id); }
+            return b;
+        }).catch(function (e) { beep('bad'); toast(e && e.message && e.message !== 'lien' ? e.message : 'Lien de bon illisible', 4500); if (fromHash) renderList(); return null; });
+    }
     var RANK = { a_recevoir: 0, en_achat: 1, achete: 2, en_cours: 3, verifie: 4, recu: 5 };
     function importBon(txt) {
         var inc; try { inc = unpackBon(txt); } catch (e) { toast('QR de bon illisible'); beep('bad'); return null; }
@@ -392,6 +410,7 @@ var qrcode=function(){function i(t,r){function a(t,r){g=function(t){for(var r=ne
     });
     function dispatchCode(code) {
         code = String(code || '').trim();
+        if (/^https?:\/\//i.test(code) && linkPayload(code)) { openFromLink(code); return; }
         if (code.indexOf(QCH) === 0) { var T = assemble(code); if (!T) return; code = T; }
         if (code.indexOf(QRC) === 0) { var rb = importRC(code); if (rb) { beep('done'); closeSheet(); openBon(rb.id); if (EMBED && rb.status === 'verifie') setTimeout(askInteg, 250); } return; }
         if (String(code).indexOf(QRP) === 0) { var b = importBon(code); if (b) { beep('ok'); closeSheet(); openBon(b.id); } return; }
@@ -412,7 +431,7 @@ var qrcode=function(){function i(t,r){function a(t,r){g=function(t){for(var r=ne
         var pend = localStorage.getItem('covo_drive_pending'), mine = localStorage.getItem('covo_recep_dirty');
         if (!pend && mine) { try { localStorage.removeItem('covo_recep_dirty'); } catch (e) {} mine = null; }
         var h = '<div class="spots">' +
-            '<button class="spot" data-spot="acheter"><span class="si">🛒</span><b>Partir aux achats</b><small>Scannez le bon imprimé ou son QR code</small></button>' +
+            '<button class="spot" data-spot="acheter"><span class="si">🛒</span><b>Partir aux achats</b><small>Scannez le QR du bon — ou visez-le avec l’appareil photo du téléphone</small></button>' +
             '<button class="spot s2" data-spot="integrer"><span class="si">📥</span><b>Intégrer un bon acheté</b><small>Au retour : scannez le bon, puis les articles</small></button></div>';
         if (standalone() && !EMBED) h += '<div class="banner info"><span>📲</span><div style="flex:1"><b>Mode autonome</b> — aucune connexion à COVO Pro n’est nécessaire : le bon arrive par son QR code, et votre réception repart vers COVO Pro par un QR code (Prévisions → 📥 Intégrer).<div class="tools" style="margin:8px 0 0"><input id="me" placeholder="Votre prénom (pour l’historique)" value="' + esc(localStorage.getItem('covo_recep_name') || '') + '"></div></div></div>';
         if (pend && mine && pend >= mine && !EMBED && !standalone()) h += '<div class="banner warn"><span>📤</span><div>Des modifications sont en attente d’envoi sur Google Drive. Ouvrez <a href="../app/">COVO Pro</a> sur cet appareil : l’envoi se fait automatiquement.</div></div>';
@@ -849,13 +868,15 @@ var qrcode=function(){function i(t,r){function a(t,r){g=function(t){for(var r=ne
             $('app').innerHTML = '<div class="gate"><div class="ic">🔐</div><h2>Connexion nécessaire</h2><p style="color:var(--mute)">Connectez-vous d’abord à COVO Pro sur cet appareil : la Réception utilise le même compte et ses données.</p><a class="big b-pri" style="text-decoration:none;display:block" href="../app/">Ouvrir COVO Pro</a></div>';
             return;
         }
+        if (!EMBED) window.addEventListener('hashchange', function () { if (linkPayload(location.hash)) openFromLink(location.hash, true); });
+        if (linkPayload(location.hash)) { renderList(); openFromLink(location.hash, true); return; }
         var q = QS.get('bon'), mode = QS.get('scan'), rc = QS.get('rc');
         if (rc) { dispatchCode(rc); if (VIEW !== 'list') return; }
         if (q) { var b = q.indexOf(QRP) === 0 ? importBon(q) : bons().find(function (x) { return x.id === q || x.numero === q; }); if (b) { openBon(b.id); return; } toast('Bon « ' + q + ' » introuvable sur cet appareil', 3500); }
         if (mode === 'integrer' || mode === 'acheter') { TABL = mode; renderList(); openScanSheet(mode); return; }
         renderList();
     }
-    window._recep = { code: dispatchCode, open: openBon, list: renderList, pack: function (id) { return packBon(getBon(id)); }, packRC: function (id) { return packRC(getBon(id)); }, parts: qrParts, importBon: importBon };
+    window._recep = { link: openFromLink, code: dispatchCode, open: openBon, list: renderList, pack: function (id) { return packBon(getBon(id)); }, packRC: function (id) { return packRC(getBon(id)); }, parts: qrParts, importBon: importBon };
     boot();
 })();
 </script>
